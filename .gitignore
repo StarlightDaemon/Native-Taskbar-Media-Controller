@@ -1,0 +1,35 @@
+# C++ build outputs
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.ilk
+*.pdb
+*.map
+*.idb
+ipch/
+
+# Visual Studio / VS Code
+.vs/
+*.suo
+*.user
+*.VC.db
+*.VC.opendb
+.vscode/
+
+# Windows
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# macOS
+.DS_Store
+
+# Editor temporaries
+*.swp
+*.swo
+*~
+*.bak
+*.tmp

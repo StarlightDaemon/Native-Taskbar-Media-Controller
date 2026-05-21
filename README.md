@@ -58,7 +58,7 @@ For the full analysis of 39 feature candidates across 11 community forks, see [`
 
 ## Acknowledgements
 
-This mod was built by studying the following community forks of the original [Taskbar Music Lounge](https://github.com/Hashah2311/taskbar-music-lounge) by Hashah2311. Design ideas and implementation patterns from each fork informed the architecture and roadmap.
+This mod was built by studying the following community forks of the original [Taskbar Music Lounge](https://github.com/ramensoftware/windhawk-mods/blob/53d96781b3215f0a082908a2539cafe178e8895a/mods/taskbar-music-lounge.wh.cpp) by Hashah2311 (author's GitHub account no longer exists; link points to the preserved source in the Windhawk community mods repo). Design ideas and implementation patterns from each fork informed the architecture and roadmap.
 
 | Author | Fork |
 |---|---|
