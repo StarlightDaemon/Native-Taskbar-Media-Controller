@@ -13,3 +13,20 @@
 - **Edict Integrity:** Confirmed `FORK_REVIEW_PROTOCOL.md` and `WORKSPACE_AUDIT_PROTOCOL.md` are present and intact in `.raiden/writ/`.
 - **Fork Inventory:** 11 unique forks (13 entries in manifest due to duplicate conflicts) verified in `/forks/MANIFEST.md`. Baseline identified at `/forks/og_Hashah2311_taskbar-music-lounge.wh/og_Hashah2311_taskbar-music-lounge.wh.cpp`.
 - **Readiness:** Confirmed no loose top-level files in `/forks/` (except `MANIFEST.md`), `fork-reports/` is currently absent, and the Instance is fully ready for fork review invocation.
+
+## [2026-05-21] Phase 1 Fixes, GitHub Setup, README, and v0.1.0-beta.1 Release
+- **Objective:** Review repo state, fix bugs, push to GitHub, add README, cut beta release.
+- **Bugs fixed in `native-taskbar-media-controller.wh.cpp`:**
+  - Stale log strings (`taskbar-media-widget: init/uninit` → correct name)
+  - `Wh_ModSettingsChanged` was setting `Margin.Right` from raw `offsetX`, bypassing `UpdateWidgetMargin()` — fixed to call `UpdateWidgetMargin()` after resize
+  - `OffsetX` YAML default was `8`; aligned to `200` to match struct default and implementation spec
+- **GitHub remote configured:** `https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller`
+  - Merged remote LICENSE (unrelated history) into local `main`
+  - Rebased `feature/rename-to-native-controller` onto updated `main`
+  - Pushed both branches; remote URL sanitized (PAT stripped) after each push
+- **README.md created:** Features, installation, settings table, roadmap, fork acknowledgements, license.
+- **Mod header updated:** `@author` → StarlightDaemon, `@version` → `0.1.0-beta.1`, description and `WindhawkModReadme` block rewritten for public release.
+- **Release cut:** `v0.1.0-beta.1` tagged on `main`, GitHub pre-release published.
+- **Raiden state updated:** CURRENT_STATE, GOALS, OPEN_LOOPS all populated.
+- **Branch status:** `feature/rename-to-native-controller` is unmerged into `main` locally — wait, actually it WAS merged into main via `--no-ff` merge commit `dc4c0d2`. Both branches are up to date on remote.
+- **PAT policy:** Two PATs were used and revoked by operator within the same session. Token is never committed or stored; remote URL is sanitized after each use.

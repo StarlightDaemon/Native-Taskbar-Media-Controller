@@ -1,10 +1,15 @@
 # Current State
 
-## Phase 1 — Complete
+## Phase 1 — Complete and Released
 
-File: `native-taskbar-media-controller.wh.cpp`
+File: `native-taskbar-media-controller.wh.cpp`  
+Version: `0.1.0-beta.1`  
+GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
+Release: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller/releases/tag/v0.1.0-beta.1
 
-The Phase 1 skeleton is built and committed on branch `feature/rename-to-native-controller`.
+**Branch state:**
+- `main` — Phase 1 complete, README present, `v0.1.0-beta.1` tagged and pushed
+- `feature/rename-to-native-controller` — fully merged into `main`; pushed to remote
 
 **What works:**
 - Native XAML injection into `Grid#RootGrid` under `Taskbar.TaskbarFrame` (no overlay window)
@@ -15,6 +20,4 @@ The Phase 1 skeleton is built and committed on branch `feature/rename-to-native-
 - Fullscreen hiding via `SHQueryUserNotificationState` poll thread (1s interval)
 - Clean unload: widget removed from XAML tree, all event tokens revoked, hook counter drain
 
-**Known open items (see OPEN_LOOPS.md):**
-- Phase 2 feature selection pending operator decision
-- OffsetX default in settings (8px) vs struct default (200px) — mismatch; struct wins at runtime because `LoadSettings` clamps negative values but not the struct default. Needs reconciliation.
+**Next:** Phase 2 feature selection — see OPEN_LOOPS.md and GOALS.md.
