@@ -28,7 +28,7 @@ fullscreen auto-hide.
   $name: Widget height (px)
 - FontSize: 11
   $name: Font size
-- OffsetX: 8
+- OffsetX: 200
   $name: Gap between widget and system tray (px)
 - HideFullscreen: true
   $name: Hide when fullscreen
@@ -733,7 +733,7 @@ static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE hFile, DWORD flag
 
 // ---------- Mod entry points ----------
 BOOL Wh_ModInit() {
-    Wh_Log(L"taskbar-media-widget: init");
+    Wh_Log(L"native-taskbar-media-controller: init");
     LoadSettings();
 
     try { init_apartment(apartment_type::multi_threaded); } catch (...) {}
@@ -759,7 +759,7 @@ BOOL Wh_ModInit() {
 }
 
 void Wh_ModUninit() {
-    Wh_Log(L"taskbar-media-widget: uninit");
+    Wh_Log(L"native-taskbar-media-controller: uninit");
     g_Unloading = true;
 
     if (g_PollStop) SetEvent(g_PollStop);
@@ -799,20 +799,20 @@ void Wh_ModSettingsChanged() {
     if (!widget) return;
     try {
         auto weak = make_weak(widget);
-        int w = g_Settings.panelWidth, h = g_Settings.panelHeight, off = g_Settings.offsetX;
+        int w = g_Settings.panelWidth, h = g_Settings.panelHeight;
         double fs = g_Settings.fontSize;
         widget.Dispatcher().RunAsync(
             Windows::UI::Core::CoreDispatcherPriority::Normal,
-            [weak, w, h, off, fs]() {
+            [weak, w, h, fs]() {
                 auto g = weak.get();
                 if (!g) return;
                 g.Width((double)w);
                 g.Height((double)h);
-                g.Margin(ThicknessHelper::FromLengths(0, 0, (double)off, 0));
                 if (auto t = FindByName<TextBlock>(g, kTitleName))  t.FontSize(fs);
                 if (auto a = FindByName<TextBlock>(g, kArtistName)) a.FontSize(fs);
                 if (auto s = FindByName<TextBlock>(g, kSessionCountName)) s.FontSize(fs);
                 ApplyStateToWidget(g);
             });
     } catch (...) {}
+    UpdateWidgetMargin();
 }
