@@ -101,6 +101,8 @@ using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Input;
 using namespace Windows::UI::Xaml::Media;
 
+#define WH_LOG_CATCH(label) catch (...) { Wh_Log(L"[exception] " label); }
+
 // ---------- Settings ----------
 struct ModSettings {
     int panelWidth = 300;
@@ -547,14 +549,14 @@ static void RemoveWidget() {
 
 // ---------- GSMTC ----------
 
-static void UpdateOneSession(int idx) {
+static bool UpdateOneSession(int idx) {
     GlobalSystemMediaTransportControlsSession session{ nullptr };
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
-        if (idx < 0 || idx >= g_MediaStateCount) return;
+        if (idx < 0 || idx >= g_MediaStateCount) return false;
         session = g_MediaStates[idx].session;
     }
-    if (!session) return;
+    if (!session) return false;
 
     std::wstring title, artist;
     bool playing = false;
@@ -569,17 +571,19 @@ static void UpdateOneSession(int idx) {
             playing = (pb.PlaybackStatus()
                 == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
         }
-    } catch (...) {}
+    } WH_LOG_CATCH(L"UpdateOneSession")
 
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
-        if (idx < g_MediaStateCount) {
-            g_MediaStates[idx].title = title;
-            g_MediaStates[idx].artist = artist;
-            g_MediaStates[idx].isPlaying = playing;
-        }
+        if (idx >= g_MediaStateCount) return false;
+        auto& m = g_MediaStates[idx];
+        if (m.title == title && m.artist == artist && m.isPlaying == playing) return false;
+        m.title     = title;
+        m.artist    = artist;
+        m.isPlaying = playing;
     }
     RefreshWidgetUI();
+    return true;
 }
 
 static void DetachSessionLocked(int idx) {
@@ -655,6 +659,21 @@ static void EnumerateSessionsAsync() {
 }
 
 // ---------- Fullscreen polling ----------
+static bool IsForegroundWindowFullscreen() {
+    HWND hFore = GetForegroundWindow();
+    if (!hFore) return false;
+    HMONITOR hMon = MonitorFromWindow(hFore, MONITOR_DEFAULTTONEAREST);
+    if (!hMon) return false;
+    MONITORINFO mi{ sizeof(mi) };
+    if (!GetMonitorInfoW(hMon, &mi)) return false;
+    RECT wr{};
+    if (!GetWindowRect(hFore, &wr)) return false;
+    return wr.left  <= mi.rcMonitor.left  &&
+           wr.top   <= mi.rcMonitor.top   &&
+           wr.right >= mi.rcMonitor.right &&
+           wr.bottom >= mi.rcMonitor.bottom;
+}
+
 static DWORD WINAPI FullscreenPollThread(LPVOID) {
     while (WaitForSingleObject(g_PollStop, 1000) == WAIT_TIMEOUT) {
         if (!g_Settings.hideFullscreen) continue;
@@ -664,7 +683,8 @@ static DWORD WINAPI FullscreenPollThread(LPVOID) {
         // display wake transitions, and dialogs. Only hide for genuine
         // fullscreen states where the taskbar itself would be hidden.
         bool hide = (state == QUNS_RUNNING_D3D_FULL_SCREEN
-                  || state == QUNS_PRESENTATION_MODE);
+                  || state == QUNS_PRESENTATION_MODE
+                  || IsForegroundWindowFullscreen());
 
         Grid widget{ nullptr };
         {
