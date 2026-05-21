@@ -1,0 +1,32 @@
+{
+  "installed_edict_version": "0.5.0",
+  "installed_at": "2026-05-19T06:30:13.295265+00:00",
+  "managed_files": [
+    {
+      "path": "README.md",
+      "hash": "91c4eb47d39c5e919e0bfb5ade45b47973f5f976a1bf51f681a7a1a66b751fa9"
+    },
+    {
+      "path": "OPERATING_RULES.md",
+      "hash": "1b201b32e4bbf9d98a7ef1293082cdbff0ea6826fc0552db6c5c24cd3e1ce84b"
+    },
+    {
+      "path": "OWNERSHIP_BOUNDARY.md",
+      "hash": "e203b5afde0afdc22889803dce2f51c570d7bdb2089581c4d7f5e3fe85e06de0"
+    },
+    {
+      "path": "WORKSPACE_AUDIT_PROTOCOL.md",
+      "hash": "1fa98a0ab068349d71556b142d433fe52462de0cca237d773e4e3dc2ad5bdbb0"
+    },
+    {
+      "path": "FORK_REVIEW_PROTOCOL.md",
+      "hash": "d74579048c32e4d727e02a89e2eef9adf79c114026541b05cee63259db5667d5"
+    }
+  ],
+  "hook_files": [
+    {
+      "path": "hooks/commit-msg",
+      "hash": "92e657422c4be1f690efcd5b62f377b961f3645c7fb340b50091ca2b25460f47"
+    }
+  ]
+}
