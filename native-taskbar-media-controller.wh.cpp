@@ -1,7 +1,7 @@
 // ==WindhawkMod==
-// @id              taskbar-media-widget
-// @name            Taskbar Media Widget
-// @description     Native XAML-injected media widget in the Windows 11 taskbar (Phase 1 skeleton).
+// @id              native-taskbar-media-controller
+// @name            Native Taskbar Media Controller
+// @description     Native XAML-injected media controller in the Windows 11 taskbar (Phase 1 skeleton).
 // @version         0.1.0
 // @author          MediaWidgetTeam
 // @include         explorer.exe
@@ -11,9 +11,9 @@
 
 // ==WindhawkModReadme==
 /*
-# Taskbar Media Widget (Phase 1 skeleton)
+# Native Taskbar Media Controller (Phase 1 skeleton)
 
-Injects a media widget directly into the Windows 11 taskbar XAML tree
+Injects a media controller directly into the Windows 11 taskbar XAML tree
 (`Grid#RootGrid` under `Taskbar.TaskbarFrame`). Phase 1 is a minimal skeleton:
 title/artist text, play-pause and next buttons, multi-session counter,
 fullscreen auto-hide.
