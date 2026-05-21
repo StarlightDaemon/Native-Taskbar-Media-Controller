@@ -1,0 +1,818 @@
+// ==WindhawkMod==
+// @id              taskbar-media-widget
+// @name            Taskbar Media Widget
+// @description     Native XAML-injected media widget in the Windows 11 taskbar (Phase 1 skeleton).
+// @version         0.1.0
+// @author          MediaWidgetTeam
+// @include         explorer.exe
+// @architecture    x86-64
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
+// ==/WindhawkMod==
+
+// ==WindhawkModReadme==
+/*
+# Taskbar Media Widget (Phase 1 skeleton)
+
+Injects a media widget directly into the Windows 11 taskbar XAML tree
+(`Grid#RootGrid` under `Taskbar.TaskbarFrame`). Phase 1 is a minimal skeleton:
+title/artist text, play-pause and next buttons, multi-session counter,
+fullscreen auto-hide.
+*/
+// ==/WindhawkModReadme==
+
+// ==WindhawkModSettings==
+/*
+- PanelWidth: 300
+  $name: Widget width (px)
+- PanelHeight: 40
+  $name: Widget height (px)
+- FontSize: 11
+  $name: Font size
+- OffsetX: 8
+  $name: Gap between widget and system tray (px)
+- HideFullscreen: true
+  $name: Hide when fullscreen
+*/
+// ==/WindhawkModSettings==
+
+#include <windhawk_api.h>
+#include <windhawk_utils.h>
+
+#include <windows.h>
+#include <shellapi.h>
+#include <shlobj.h>
+
+
+// winbase.h defines GetCurrentTime() as a macro wrapping GetTickCount().
+// winrt XAML headers declare a virtual GetCurrentTime(int64_t*) method.
+// Undefine the macro before pulling in WinRT to avoid the collision.
+#undef GetCurrentTime
+
+#include <atomic>
+#include <mutex>
+#include <string>
+#include <thread>
+
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Media.Control.h>
+#include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.Core.h>
+#include <winrt/Windows.UI.Text.h>
+#include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.Xaml.Automation.h>
+#include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Input.h>
+#include <winrt/Windows.UI.Xaml.Media.h>
+
+using namespace winrt;
+using namespace Windows::Foundation;
+using namespace Windows::Media::Control;
+using namespace Windows::UI;
+using namespace Windows::UI::Xaml;
+using namespace Windows::UI::Xaml::Automation;
+using namespace Windows::UI::Xaml::Controls;
+using namespace Windows::UI::Xaml::Input;
+using namespace Windows::UI::Xaml::Media;
+
+// ---------- Settings ----------
+struct ModSettings {
+    int panelWidth = 300;
+    int panelHeight = 40;
+    int fontSize = 11;
+    int offsetX = 200;
+    bool hideFullscreen = true;
+} g_Settings;
+
+static void LoadSettings() {
+    g_Settings.panelWidth   = Wh_GetIntSetting(L"PanelWidth");
+    g_Settings.panelHeight  = Wh_GetIntSetting(L"PanelHeight");
+    g_Settings.fontSize     = Wh_GetIntSetting(L"FontSize");
+    g_Settings.offsetX      = Wh_GetIntSetting(L"OffsetX");
+    g_Settings.hideFullscreen = Wh_GetIntSetting(L"HideFullscreen") != 0;
+    if (g_Settings.panelWidth   <= 0) g_Settings.panelWidth = 300;
+    if (g_Settings.panelHeight  <= 0) g_Settings.panelHeight = 40;
+    if (g_Settings.fontSize     <= 0) g_Settings.fontSize = 11;
+    if (g_Settings.offsetX      <  0) g_Settings.offsetX = 8;
+}
+
+// ---------- GSMTC multi-session state ----------
+static constexpr int MAX_SESSIONS = 10;
+
+struct MediaState {
+    std::wstring title;
+    std::wstring artist;
+    std::wstring sessionId;    // AUMID (SourceAppUserModelId)
+    bool isPlaying = false;
+    int64_t positionMs = 0;
+    int64_t durationMs = 0;
+    GlobalSystemMediaTransportControlsSession session{ nullptr };
+    event_token propsChangedToken{};
+    event_token playbackChangedToken{};
+};
+
+static MediaState g_MediaStates[MAX_SESSIONS];
+static int g_MediaStateCount = 0;
+static int g_ActiveSessionIndex = 0;
+static std::mutex g_MediaMutex;
+static GlobalSystemMediaTransportControlsSessionManager g_SessionManager{ nullptr };
+static event_token g_SessionsChangedToken{};
+
+// ---------- XAML injection state ----------
+constexpr std::wstring_view kWidgetRootName = L"TaskbarMediaWidgetRoot";
+constexpr std::wstring_view kTitleName      = L"NowPlayingTitle";
+constexpr std::wstring_view kArtistName     = L"NowPlayingArtist";
+constexpr std::wstring_view kPlayPauseName  = L"NowPlayingPlayPause";
+constexpr std::wstring_view kNextName       = L"NowPlayingNext";
+constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
+constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
+constexpr std::wstring_view kRootGridName       = L"RootGrid";
+constexpr std::wstring_view kSystemTrayGridName = L"SystemTrayFrameGrid";
+
+static std::mutex g_WidgetMutex;
+static weak_ref<Grid> g_WidgetRoot{ nullptr };
+static weak_ref<Grid> g_RootGrid{ nullptr };
+static weak_ref<FrameworkElement> g_SystemTray{ nullptr };
+static event_token g_TrayResizeToken{};
+static std::atomic<bool> g_ScanPending{ false };
+static std::atomic<bool> g_TaskbarViewDllLoaded{ false };
+static std::atomic<int> g_HookCallCounter{ 0 };
+static std::atomic<bool> g_Unloading{ false };
+static HANDLE g_PollThread = nullptr;
+static HANDLE g_PollStop = nullptr;
+
+// ---------- Helpers ----------
+static FrameworkElement GetFrameworkElementFromNative(void* pThis) {
+    // pThis points to a WinRT implements<> object. Offset +3 (24 bytes) is where
+    // the IInspectable vtable shim lives inside the object for TaskListButton.
+    // The address of that slot IS the COM interface pointer — do not dereference.
+    try {
+        void* ifacePtr = (void**)pThis + 3;
+        IInspectable insp{ nullptr };
+        copy_from_abi(insp, ifacePtr);
+        auto fe = insp.try_as<FrameworkElement>();
+        return fe;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+static FrameworkElement WalkUpToTaskbarFrame(FrameworkElement start) {
+    FrameworkElement cur = start;
+    while (cur) {
+        if (winrt::get_class_name(cur) == kTaskbarFrameClass) return cur;
+        auto parent = VisualTreeHelper::GetParent(cur);
+        cur = parent ? parent.try_as<FrameworkElement>() : nullptr;
+    }
+    return nullptr;
+}
+
+static Grid FindRootGrid(FrameworkElement taskbarFrame) {
+    if (!taskbarFrame) return nullptr;
+    int count = VisualTreeHelper::GetChildrenCount(taskbarFrame);
+    for (int i = 0; i < count; ++i) {
+        auto child = VisualTreeHelper::GetChild(taskbarFrame, i);
+        if (!child) continue;
+        auto fe = child.try_as<FrameworkElement>();
+        if (fe && std::wstring(fe.Name()) == kRootGridName)
+            return fe.try_as<Grid>();
+    }
+    return nullptr;
+}
+
+static SolidColorBrush MakeBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
+    return SolidColorBrush(ColorHelper::FromArgb(a, r, g, b));
+}
+
+// Forward
+static void RefreshWidgetUI();
+static void EnumerateSessionsAsync();
+
+// Recompute the widget's right margin from the measured system tray width.
+// Called at inject time and whenever the tray resizes.
+static void UpdateWidgetMargin() {
+    Grid widget{ nullptr };
+    FrameworkElement tray{ nullptr };
+    {
+        std::lock_guard<std::mutex> g(g_WidgetMutex);
+        widget = g_WidgetRoot.get();
+        tray   = g_SystemTray.get();
+    }
+    if (!widget) return;
+
+    double trayWidth = tray ? tray.ActualWidth() : 0.0;
+    double gap       = (double)g_Settings.offsetX;   // user-controlled gap from tray
+    double margin    = trayWidth + gap;
+    Wh_Log(L"[pos] trayWidth=%.0f gap=%.0f => Margin.Right=%.0f", trayWidth, gap, margin);
+    widget.Margin(ThicknessHelper::FromLengths(0, 0, margin, 0));
+}
+
+// ---------- Widget construction ----------
+static Grid BuildWidget() {
+    Grid root;
+    root.Name(kWidgetRootName);
+    root.Width((double)g_Settings.panelWidth);
+    root.Height((double)g_Settings.panelHeight);
+    root.HorizontalAlignment(HorizontalAlignment::Right);
+    root.VerticalAlignment(VerticalAlignment::Center);
+    root.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
+    root.CornerRadius(CornerRadiusHelper::FromUniformRadius(8.0));
+    Canvas::SetZIndex(root, 2);
+    // Span all columns so right-alignment is relative to full taskbar width.
+    Grid::SetColumnSpan(root, 9999);
+    Grid::SetRowSpan(root, 9999);
+    // Margin.Right is set dynamically via UpdateWidgetMargin() once tray width is known.
+
+    StackPanel layout;
+    layout.Orientation(Orientation::Horizontal);
+    layout.VerticalAlignment(VerticalAlignment::Center);
+    layout.Margin(ThicknessHelper::FromLengths(8.0, 0.0, 8.0, 0.0));
+
+    // Session count chip (collapsed by default)
+    TextBlock sessionCount;
+    sessionCount.Name(kSessionCountName);
+    sessionCount.Text(L"");
+    sessionCount.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+    sessionCount.FontSize((double)g_Settings.fontSize);
+    sessionCount.VerticalAlignment(VerticalAlignment::Center);
+    sessionCount.Margin(ThicknessHelper::FromLengths(0, 0, 6, 0));
+    sessionCount.Visibility(Visibility::Collapsed);
+    AutomationProperties::SetName(sessionCount, L"Cycle media session");
+    sessionCount.Tapped(TappedEventHandler(
+        [](IInspectable const&, TappedRoutedEventArgs const& e) {
+            std::lock_guard<std::mutex> g(g_MediaMutex);
+            if (g_MediaStateCount > 1) {
+                g_ActiveSessionIndex = (g_ActiveSessionIndex + 1) % g_MediaStateCount;
+            }
+            e.Handled(true);
+            RefreshWidgetUI();
+        }));
+    layout.Children().Append(sessionCount);
+
+    // Title / artist column
+    StackPanel textCol;
+    textCol.Orientation(Orientation::Vertical);
+    textCol.VerticalAlignment(VerticalAlignment::Center);
+    textCol.MaxWidth(180.0);
+
+    TextBlock title;
+    title.Name(kTitleName);
+    title.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+    title.FontSize((double)g_Settings.fontSize);
+    title.TextTrimming(TextTrimming::CharacterEllipsis);
+    title.TextWrapping(TextWrapping::NoWrap);
+    title.MaxLines(1);
+
+    TextBlock artist;
+    artist.Name(kArtistName);
+    artist.Foreground(MakeBrush(0xB3, 0xFF, 0xFF, 0xFF));
+    artist.FontSize((double)g_Settings.fontSize);
+    artist.TextTrimming(TextTrimming::CharacterEllipsis);
+    artist.TextWrapping(TextWrapping::NoWrap);
+    artist.MaxLines(1);
+
+    textCol.Children().Append(title);
+    textCol.Children().Append(artist);
+    layout.Children().Append(textCol);
+
+    // Play/Pause
+    Button playPause;
+    playPause.Name(kPlayPauseName);
+    playPause.Content(box_value(hstring{L"▶"})); // ▶
+    playPause.Background(MakeBrush(0x00, 0, 0, 0));
+    playPause.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+    playPause.BorderThickness(ThicknessHelper::FromUniformLength(0));
+    playPause.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
+    playPause.Margin(ThicknessHelper::FromLengths(8, 0, 2, 0));
+    playPause.VerticalAlignment(VerticalAlignment::Center);
+    AutomationProperties::SetName(playPause, L"Play or pause");
+    playPause.Click(RoutedEventHandler(
+        [](IInspectable const&, RoutedEventArgs const&) {
+            GlobalSystemMediaTransportControlsSession s{ nullptr };
+            {
+                std::lock_guard<std::mutex> g(g_MediaMutex);
+                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount) {
+                    s = g_MediaStates[g_ActiveSessionIndex].session;
+                }
+            }
+            if (s) {
+                try { s.TryTogglePlayPauseAsync(); } catch (...) {}
+            }
+        }));
+    layout.Children().Append(playPause);
+
+    // Next
+    Button next;
+    next.Name(kNextName);
+    next.Content(box_value(hstring{L"⏭"})); // ⏭
+    next.Background(MakeBrush(0x00, 0, 0, 0));
+    next.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+    next.BorderThickness(ThicknessHelper::FromUniformLength(0));
+    next.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
+    next.Margin(ThicknessHelper::FromLengths(2, 0, 0, 0));
+    next.VerticalAlignment(VerticalAlignment::Center);
+    AutomationProperties::SetName(next, L"Next track");
+    next.Click(RoutedEventHandler(
+        [](IInspectable const&, RoutedEventArgs const&) {
+            GlobalSystemMediaTransportControlsSession s{ nullptr };
+            {
+                std::lock_guard<std::mutex> g(g_MediaMutex);
+                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount) {
+                    s = g_MediaStates[g_ActiveSessionIndex].session;
+                }
+            }
+            if (s) {
+                try { s.TrySkipNextAsync(); } catch (...) {}
+            }
+        }));
+    layout.Children().Append(next);
+
+    root.Children().Append(layout);
+    return root;
+}
+
+template <typename T>
+static T FindByName(FrameworkElement parent, std::wstring_view name) {
+    if (!parent) return nullptr;
+    auto fe = parent.try_as<FrameworkElement>();
+    if (fe && std::wstring(fe.Name()) == name) {
+        if (auto t = fe.try_as<T>()) return t;
+    }
+    int count = VisualTreeHelper::GetChildrenCount(parent);
+    for (int i = 0; i < count; ++i) {
+        auto child = VisualTreeHelper::GetChild(parent, i);
+        if (!child) continue;
+        auto cfe = child.try_as<FrameworkElement>();
+        if (!cfe) continue;
+        if (auto found = FindByName<T>(cfe, name)) return found;
+    }
+    return nullptr;
+}
+
+static void ApplyStateToWidget(Grid widget) {
+    if (!widget) return;
+
+    int count = 0;
+    int activeIdx = 0;
+    bool hasMedia = false;
+    std::wstring title, artist;
+    bool isPlaying = false;
+    {
+        std::lock_guard<std::mutex> g(g_MediaMutex);
+        count = g_MediaStateCount;
+        activeIdx = g_ActiveSessionIndex;
+        if (activeIdx >= 0 && activeIdx < count) {
+            auto& m = g_MediaStates[activeIdx];
+            title = m.title;
+            artist = m.artist;
+            isPlaying = m.isPlaying;
+            hasMedia = !title.empty();
+        }
+    }
+
+    auto titleTb   = FindByName<TextBlock>(widget, kTitleName);
+    auto artistTb  = FindByName<TextBlock>(widget, kArtistName);
+    auto playBtn   = FindByName<Button>(widget, kPlayPauseName);
+    auto sessTb    = FindByName<TextBlock>(widget, kSessionCountName);
+
+    if (titleTb)  titleTb.Text(hasMedia ? title  : L"");
+    if (artistTb) artistTb.Text(hasMedia ? artist : L"");
+    if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"⏸" : L"▶"}));
+    if (sessTb) {
+        if (count > 1) {
+            sessTb.Text(std::to_wstring(count));
+            sessTb.Visibility(Visibility::Visible);
+        } else {
+            sessTb.Text(L"");
+            sessTb.Visibility(Visibility::Collapsed);
+        }
+    }
+
+    widget.Visibility(hasMedia ? Visibility::Visible : Visibility::Collapsed);
+}
+
+static void RefreshWidgetUI() {
+    Grid widget{ nullptr };
+    {
+        std::lock_guard<std::mutex> g(g_WidgetMutex);
+        widget = g_WidgetRoot.get();
+    }
+    if (!widget) return;
+    try {
+        auto weak = make_weak(widget);
+        widget.Dispatcher().RunAsync(
+            Windows::UI::Core::CoreDispatcherPriority::Normal,
+            [weak]() {
+                if (auto w = weak.get()) ApplyStateToWidget(w);
+            });
+    } catch (...) {}
+}
+
+// ---------- Injection ----------
+static void InjectWidgetInto(Grid rootGrid) {
+    if (!rootGrid) return;
+
+    // Already injected?
+    auto existing = FindByName<Grid>(rootGrid, kWidgetRootName);
+    if (existing) {
+        Wh_Log(L"[inject] widget already present — refreshing state");
+        std::lock_guard<std::mutex> g(g_WidgetMutex);
+        g_WidgetRoot = make_weak(existing);
+        g_RootGrid   = make_weak(rootGrid);
+        ApplyStateToWidget(existing);
+        return;
+    }
+
+    // Locate the system tray so we can right-anchor against it.
+    FrameworkElement tray{ nullptr };
+    int childCount = (int)rootGrid.Children().Size();
+    for (int i = 0; i < childCount; ++i) {
+        auto fe = rootGrid.Children().GetAt(i).try_as<FrameworkElement>();
+        if (!fe) continue;
+        std::wstring name = std::wstring(fe.Name());
+        if (name == kSystemTrayGridName) {
+            tray = fe;
+        }
+    }
+
+    auto widget = BuildWidget();
+    rootGrid.Children().Append(widget);
+
+    {
+        std::lock_guard<std::mutex> g(g_WidgetMutex);
+        g_WidgetRoot   = make_weak(widget);
+        g_RootGrid     = make_weak(rootGrid);
+        g_SystemTray   = tray ? make_weak(tray) : weak_ref<FrameworkElement>{ nullptr };
+        // Detach old tray resize subscription if present.
+        if (tray && g_TrayResizeToken.value) {
+            try { tray.SizeChanged(g_TrayResizeToken); } catch (...) {}
+            g_TrayResizeToken = {};
+        }
+    }
+
+    // Subscribe to tray resize to keep margin accurate when icon count changes.
+    if (tray) {
+        g_TrayResizeToken = tray.SizeChanged(
+            [](IInspectable const&, SizeChangedEventArgs const&) {
+                UpdateWidgetMargin();
+            });
+    }
+
+    UpdateWidgetMargin();  // set initial Margin.Right = trayWidth + gap
+    ApplyStateToWidget(widget);
+}
+
+static void ScheduleScanAsync(FrameworkElement startNode) {
+    if (!startNode) return;
+    if (g_Unloading.load()) return;
+    bool expected = false;
+    if (!g_ScanPending.compare_exchange_strong(expected, true)) return;
+
+    auto weak = make_weak(startNode);
+    try {
+        startNode.Dispatcher().RunAsync(
+            Windows::UI::Core::CoreDispatcherPriority::Low,
+            [weak]() {
+                g_ScanPending = false;
+                if (g_Unloading.load()) return;
+                auto node = weak.get();
+                if (!node) return;
+                try {
+                    auto frame = WalkUpToTaskbarFrame(node);
+                    if (!frame) return;
+                    auto rootGrid = FindRootGrid(frame);
+                    if (!rootGrid) return;
+                    InjectWidgetInto(rootGrid);
+                } catch (...) {}
+            });
+    } catch (...) {
+        g_ScanPending = false;
+    }
+}
+
+static void RemoveWidget() {
+    Grid widget{ nullptr };
+    Grid rootGrid{ nullptr };
+    {
+        std::lock_guard<std::mutex> g(g_WidgetMutex);
+        widget = g_WidgetRoot.get();
+        rootGrid = g_RootGrid.get();
+        g_WidgetRoot = nullptr;
+        g_RootGrid = nullptr;
+    }
+    if (!widget || !rootGrid) return;
+    try {
+        auto weakGrid = make_weak(rootGrid);
+        rootGrid.Dispatcher().RunAsync(
+            Windows::UI::Core::CoreDispatcherPriority::Normal,
+            [weakGrid]() {
+                auto g = weakGrid.get();
+                if (!g) return;
+                auto children = g.Children();
+                for (int i = (int)children.Size() - 1; i >= 0; --i) {
+                    auto el = children.GetAt(i).try_as<FrameworkElement>();
+                    if (el && std::wstring(el.Name()) == kWidgetRootName) {
+                        children.RemoveAt(i);
+                    }
+                }
+            });
+    } catch (...) {}
+}
+
+// ---------- GSMTC ----------
+
+static void UpdateOneSession(int idx) {
+    GlobalSystemMediaTransportControlsSession session{ nullptr };
+    {
+        std::lock_guard<std::mutex> g(g_MediaMutex);
+        if (idx < 0 || idx >= g_MediaStateCount) return;
+        session = g_MediaStates[idx].session;
+    }
+    if (!session) return;
+
+    std::wstring title, artist;
+    bool playing = false;
+    try {
+        auto props = session.TryGetMediaPropertiesAsync().get();
+        if (props) {
+            title  = props.Title().c_str();
+            artist = props.Artist().c_str();
+        }
+        auto pb = session.GetPlaybackInfo();
+        if (pb) {
+            playing = (pb.PlaybackStatus()
+                == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+        }
+    } catch (...) {}
+
+    {
+        std::lock_guard<std::mutex> g(g_MediaMutex);
+        if (idx < g_MediaStateCount) {
+            g_MediaStates[idx].title = title;
+            g_MediaStates[idx].artist = artist;
+            g_MediaStates[idx].isPlaying = playing;
+        }
+    }
+    RefreshWidgetUI();
+}
+
+static void DetachSessionLocked(int idx) {
+    if (idx < 0 || idx >= g_MediaStateCount) return;
+    auto& m = g_MediaStates[idx];
+    try {
+        if (m.session) {
+            if (m.propsChangedToken.value)    m.session.MediaPropertiesChanged(m.propsChangedToken);
+            if (m.playbackChangedToken.value) m.session.PlaybackInfoChanged(m.playbackChangedToken);
+        }
+    } catch (...) {}
+    m = MediaState{};
+}
+
+static void EnumerateSessionsAsync() {
+    Wh_Log(L"[gsmtc] creating thread");
+    std::thread([]() {
+        Wh_Log(L"[gsmtc] thread body entered");
+        // WinRT must be initialized on each thread before any API call.
+        try { init_apartment(apartment_type::multi_threaded); } catch (...) {}
+        Wh_Log(L"[gsmtc] apartment init done");
+        try {
+            if (!g_SessionManager) {
+                Wh_Log(L"[gsmtc] calling RequestAsync");
+                g_SessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+                Wh_Log(L"[gsmtc] RequestAsync complete, manager=%s", g_SessionManager ? L"ok" : L"null");
+                if (!g_SessionManager) return;
+                g_SessionsChangedToken = g_SessionManager.SessionsChanged(
+                    [](auto&&, auto&&) { EnumerateSessionsAsync(); });
+            }
+            auto sessions = g_SessionManager.GetSessions();
+
+            std::lock_guard<std::mutex> g(g_MediaMutex);
+            // Detach all current
+            for (int i = 0; i < g_MediaStateCount; ++i) DetachSessionLocked(i);
+            g_MediaStateCount = 0;
+
+            int playingIdx = -1;
+            for (auto const& s : sessions) {
+                if (g_MediaStateCount >= MAX_SESSIONS) break;
+                auto& m = g_MediaStates[g_MediaStateCount];
+                m.session = s;
+                try { m.sessionId = s.SourceAppUserModelId().c_str(); } catch (...) {}
+                try {
+                    m.propsChangedToken = s.MediaPropertiesChanged(
+                        [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSession(idx); });
+                } catch (...) {}
+                try {
+                    m.playbackChangedToken = s.PlaybackInfoChanged(
+                        [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSession(idx); });
+                } catch (...) {}
+                try {
+                    auto pb = s.GetPlaybackInfo();
+                    if (pb && pb.PlaybackStatus()
+                            == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
+                        if (playingIdx == -1) playingIdx = g_MediaStateCount;
+                    }
+                } catch (...) {}
+                g_MediaStateCount++;
+            }
+            g_ActiveSessionIndex = (playingIdx >= 0) ? playingIdx : 0;
+            Wh_Log(L"[gsmtc] enumerated %d session(s), active=%d", g_MediaStateCount, g_ActiveSessionIndex);
+        } catch (...) {
+            Wh_Log(L"[gsmtc] exception in EnumerateSessionsAsync");
+        }
+
+        // Pull initial props for each
+        int n;
+        { std::lock_guard<std::mutex> g(g_MediaMutex); n = g_MediaStateCount; }
+        for (int i = 0; i < n; ++i) UpdateOneSession(i);
+        RefreshWidgetUI();
+    }).detach();
+}
+
+// ---------- Fullscreen polling ----------
+static DWORD WINAPI FullscreenPollThread(LPVOID) {
+    while (WaitForSingleObject(g_PollStop, 1000) == WAIT_TIMEOUT) {
+        if (!g_Settings.hideFullscreen) continue;
+        QUERY_USER_NOTIFICATION_STATE state{};
+        if (FAILED(SHQueryUserNotificationState(&state))) continue;
+        // QUNS_BUSY is intentionally excluded — it fires during lock screen,
+        // display wake transitions, and dialogs. Only hide for genuine
+        // fullscreen states where the taskbar itself would be hidden.
+        bool hide = (state == QUNS_RUNNING_D3D_FULL_SCREEN
+                  || state == QUNS_PRESENTATION_MODE);
+
+        Grid widget{ nullptr };
+        {
+            std::lock_guard<std::mutex> g(g_WidgetMutex);
+            widget = g_WidgetRoot.get();
+        }
+        if (!widget) continue;
+        try {
+            auto weak = make_weak(widget);
+            widget.Dispatcher().RunAsync(
+                Windows::UI::Core::CoreDispatcherPriority::Low,
+                [weak, hide]() {
+                    if (auto w = weak.get()) {
+                        if (hide) {
+                            w.Visibility(Visibility::Collapsed);
+                        } else {
+                            ApplyStateToWidget(w);
+                        }
+                    }
+                });
+        } catch (...) {}
+    }
+    return 0;
+}
+
+// ---------- Hooks ----------
+using TaskListButton_UpdateVisualStates_t = void(WINAPI*)(void*);
+static TaskListButton_UpdateVisualStates_t TaskListButton_UpdateVisualStates_Original = nullptr;
+static void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
+    g_HookCallCounter++;
+    TaskListButton_UpdateVisualStates_Original(pThis);
+    if (!g_Unloading.load()) {
+        auto elem = GetFrameworkElementFromNative(pThis);
+        if (elem) ScheduleScanAsync(elem);
+    }
+    g_HookCallCounter--;
+}
+
+static bool HookTaskbarViewDllSymbols(HMODULE module) {
+    WindhawkUtils::SYMBOL_HOOK hooks[] = {
+        {
+            { L"private: void __cdecl winrt::Taskbar::implementation::TaskListButton::UpdateVisualStates(void)" },
+            (void**)&TaskListButton_UpdateVisualStates_Original,
+            (void*)TaskListButton_UpdateVisualStates_Hook,
+            false,
+        },
+    };
+    if (!WindhawkUtils::HookSymbols(module, hooks, ARRAYSIZE(hooks))) {
+        Wh_Log(L"HookSymbols(Taskbar.View.dll) failed");
+        return false;
+    }
+    return true;
+}
+
+using LoadLibraryExW_t = decltype(&LoadLibraryExW);
+static LoadLibraryExW_t LoadLibraryExW_Original = nullptr;
+// Post WM_SIZE to Shell_TrayWnd (and secondary bars) to trigger UpdateVisualStates
+// without waiting for user interaction. Called after hooks are applied.
+static void TriggerInitialScan() {
+    std::thread([]() {
+        Sleep(200);
+        HWND hTray = FindWindowW(L"Shell_TrayWnd", nullptr);
+        if (hTray) {
+            RECT rc{};
+            GetClientRect(hTray, &rc);
+            PostMessageW(hTray, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+        }
+        HWND hTray2 = FindWindowW(L"Shell_SecondaryTrayWnd", nullptr);
+        while (hTray2) {
+            PostMessageW(hTray2, WM_SIZE, SIZE_RESTORED, 0);
+            hTray2 = FindWindowExW(nullptr, hTray2, L"Shell_SecondaryTrayWnd", nullptr);
+        }
+    }).detach();
+}
+
+static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE hFile, DWORD flags) {
+    HMODULE module = LoadLibraryExW_Original(name, hFile, flags);
+    if (module && !g_TaskbarViewDllLoaded.load() && name) {
+        if (wcsstr(name, L"Taskbar.View.dll") || wcsstr(name, L"ExplorerExtensions.dll")) {
+            bool already = g_TaskbarViewDllLoaded.exchange(true);
+            if (!already) {
+                HookTaskbarViewDllSymbols(module);
+                Wh_ApplyHookOperations();
+                TriggerInitialScan();
+            }
+        }
+    }
+    return module;
+}
+
+// ---------- Mod entry points ----------
+BOOL Wh_ModInit() {
+    Wh_Log(L"taskbar-media-widget: init");
+    LoadSettings();
+
+    try { init_apartment(apartment_type::multi_threaded); } catch (...) {}
+
+    HMODULE taskbarView = GetModuleHandleW(L"Taskbar.View.dll");
+    if (!taskbarView) taskbarView = GetModuleHandleW(L"ExplorerExtensions.dll");
+
+    if (taskbarView) {
+        g_TaskbarViewDllLoaded = true;
+        if (!HookTaskbarViewDllSymbols(taskbarView)) return FALSE;
+    } else {
+        Wh_SetFunctionHook((void*)LoadLibraryExW,
+                           (void*)LoadLibraryExW_Hook,
+                           (void**)&LoadLibraryExW_Original);
+    }
+
+    g_PollStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
+
+    EnumerateSessionsAsync();
+    TriggerInitialScan();
+    return TRUE;
+}
+
+void Wh_ModUninit() {
+    Wh_Log(L"taskbar-media-widget: uninit");
+    g_Unloading = true;
+
+    if (g_PollStop) SetEvent(g_PollStop);
+    if (g_PollThread) {
+        WaitForSingleObject(g_PollThread, 2000);
+        CloseHandle(g_PollThread);
+        g_PollThread = nullptr;
+    }
+    if (g_PollStop) { CloseHandle(g_PollStop); g_PollStop = nullptr; }
+
+    {
+        std::lock_guard<std::mutex> g(g_MediaMutex);
+        try {
+            if (g_SessionManager && g_SessionsChangedToken.value) {
+                g_SessionManager.SessionsChanged(g_SessionsChangedToken);
+                g_SessionsChangedToken = {};
+            }
+        } catch (...) {}
+        for (int i = 0; i < g_MediaStateCount; ++i) DetachSessionLocked(i);
+        g_MediaStateCount = 0;
+        g_SessionManager = nullptr;
+    }
+
+    RemoveWidget();
+
+    // Spin until in-flight hooks finish.
+    for (int i = 0; i < 50 && g_HookCallCounter.load() > 0; ++i) Sleep(100);
+}
+
+void Wh_ModSettingsChanged() {
+    LoadSettings();
+    Grid widget{ nullptr };
+    {
+        std::lock_guard<std::mutex> g(g_WidgetMutex);
+        widget = g_WidgetRoot.get();
+    }
+    if (!widget) return;
+    try {
+        auto weak = make_weak(widget);
+        int w = g_Settings.panelWidth, h = g_Settings.panelHeight, off = g_Settings.offsetX;
+        double fs = g_Settings.fontSize;
+        widget.Dispatcher().RunAsync(
+            Windows::UI::Core::CoreDispatcherPriority::Normal,
+            [weak, w, h, off, fs]() {
+                auto g = weak.get();
+                if (!g) return;
+                g.Width((double)w);
+                g.Height((double)h);
+                g.Margin(ThicknessHelper::FromLengths(0, 0, (double)off, 0));
+                if (auto t = FindByName<TextBlock>(g, kTitleName))  t.FontSize(fs);
+                if (auto a = FindByName<TextBlock>(g, kArtistName)) a.FontSize(fs);
+                if (auto s = FindByName<TextBlock>(g, kSessionCountName)) s.FontSize(fs);
+                ApplyStateToWidget(g);
+            });
+    } catch (...) {}
+}
