@@ -4,6 +4,6 @@
 
 Fork synthesis is complete (see `fork-reports/synthesis-2026-05-19.md`). Phase 2 feature scope has not been decided. Operator must select which synthesis candidates to implement next.
 
-## OL-3: `feature/rename-to-native-controller` branch not merged
+## ~~OL-3: `feature/rename-to-native-controller` branch not merged~~ CLOSED
 
-Phase 1 work lives on this branch. Merge to `main` when ready.
+Merged to `main` via `dc4c0d2`. Closed 2026-05-21.
