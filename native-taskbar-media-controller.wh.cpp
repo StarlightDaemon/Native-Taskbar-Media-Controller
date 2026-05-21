@@ -1,9 +1,9 @@
 // ==WindhawkMod==
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
-// @description     Native XAML-injected media controller in the Windows 11 taskbar (Phase 1 skeleton).
-// @version         0.1.0
-// @author          MediaWidgetTeam
+// @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
+// @version         0.1.0-beta.1
+// @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
 // @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
@@ -11,12 +11,36 @@
 
 // ==WindhawkModReadme==
 /*
-# Native Taskbar Media Controller (Phase 1 skeleton)
+# Native Taskbar Media Controller
 
-Injects a media controller directly into the Windows 11 taskbar XAML tree
-(`Grid#RootGrid` under `Taskbar.TaskbarFrame`). Phase 1 is a minimal skeleton:
-title/artist text, play-pause and next buttons, multi-session counter,
-fullscreen auto-hide.
+Injects a media controller natively into the Windows 11 taskbar XAML tree — no overlay window,
+no separate process. The widget lives as a real child of the taskbar's own UI, giving it correct
+z-ordering, auto-hide support, and DPI handling automatically.
+
+## Features
+
+- **Now playing** — title and artist from any GSMTC-compatible app (Spotify, YouTube Music,
+  Windows Media Player, browsers, etc.)
+- **Playback controls** — play/pause toggle and skip-next buttons
+- **Multi-session** — a session count chip appears when multiple media apps are active; tap it
+  to cycle between sessions
+- **Fullscreen auto-hide** — panel collapses automatically when a fullscreen app is detected
+- **Configurable** — panel width/height, font size, tray gap, fullscreen behavior
+
+## Settings
+
+| Setting | Default | Notes |
+|---|---|---|
+| Widget width (px) | 300 | |
+| Widget height (px) | 40 | |
+| Font size | 11 | |
+| Gap from tray (px) | 200 | Increase if the panel overlaps the clock or tray icons |
+| Hide when fullscreen | true | |
+
+## Requirements
+
+- Windows 11 (22H2 or later)
+- [Windhawk](https://windhawk.net) mod loader
 */
 // ==/WindhawkModReadme==
 
