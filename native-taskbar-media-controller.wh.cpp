@@ -145,6 +145,11 @@ static int g_ActiveSessionIndex = 0;
 static std::mutex g_MediaMutex;
 static GlobalSystemMediaTransportControlsSessionManager g_SessionManager{ nullptr };
 static event_token g_SessionsChangedToken{};
+static IAsyncOperation<GlobalSystemMediaTransportControlsSessionManager> g_PendingRequest{ nullptr };
+static std::atomic<int> g_AsyncTasks{ 0 };
+static HANDLE g_GsmtcStartEvent = nullptr;
+static HANDLE g_GsmtcThread = nullptr;
+static DWORD g_GsmtcThreadId = 0;
 
 // ---------- XAML injection state ----------
 constexpr std::wstring_view kWidgetRootName = L"TaskbarMediaWidgetRoot";
@@ -214,7 +219,7 @@ static SolidColorBrush MakeBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
 
 // Forward
 static void RefreshWidgetUI();
-static void EnumerateSessionsAsync();
+static void UpdateWidgetMargin();
 
 // Recompute the widget's right margin from the measured system tray width.
 // Called at inject time and whenever the tray resizes.
@@ -229,7 +234,7 @@ static void UpdateWidgetMargin() {
     if (!widget) return;
 
     double trayWidth = tray ? tray.ActualWidth() : 0.0;
-    double gap       = (double)g_Settings.offsetX;   // user-controlled gap from tray
+    double gap       = (double)g_Settings.offsetX;
     double margin    = trayWidth + gap;
     Wh_Log(L"[pos] trayWidth=%.0f gap=%.0f => Margin.Right=%.0f", trayWidth, gap, margin);
     widget.Margin(ThicknessHelper::FromLengths(0, 0, margin, 0));
@@ -444,10 +449,15 @@ static void InjectWidgetInto(Grid rootGrid) {
     auto existing = FindByName<Grid>(rootGrid, kWidgetRootName);
     if (existing) {
         Wh_Log(L"[inject] widget already present — refreshing state");
-        std::lock_guard<std::mutex> g(g_WidgetMutex);
-        g_WidgetRoot = make_weak(existing);
-        g_RootGrid   = make_weak(rootGrid);
-        ApplyStateToWidget(existing);
+        {
+            std::lock_guard<std::mutex> g(g_WidgetMutex);
+            g_WidgetRoot = make_weak(existing);
+            g_RootGrid   = make_weak(rootGrid);
+            ApplyStateToWidget(existing);
+        }
+        // Signal even on the "already present" path — the GSMTC thread waits
+        // on this event and the widget is ready either way.
+        if (g_GsmtcStartEvent) SetEvent(g_GsmtcStartEvent);
         return;
     }
 
@@ -488,6 +498,11 @@ static void InjectWidgetInto(Grid rootGrid) {
 
     UpdateWidgetMargin();  // set initial Margin.Right = trayWidth + gap
     ApplyStateToWidget(widget);
+
+    if (g_GsmtcStartEvent) {
+        bool signaled = SetEvent(g_GsmtcStartEvent);
+        Wh_Log(L"[inject] signaled GSMTC start event (SetEvent=%d)", (int)signaled);
+    }
 }
 
 static void ScheduleScanAsync(FrameworkElement startNode) {
@@ -495,6 +510,8 @@ static void ScheduleScanAsync(FrameworkElement startNode) {
     if (g_Unloading.load()) return;
     bool expected = false;
     if (!g_ScanPending.compare_exchange_strong(expected, true)) return;
+
+    Wh_Log(L"[inject] ScheduleScanAsync started on dispatcher");
 
     auto weak = make_weak(startNode);
     try {
@@ -504,17 +521,30 @@ static void ScheduleScanAsync(FrameworkElement startNode) {
                 g_ScanPending = false;
                 if (g_Unloading.load()) return;
                 auto node = weak.get();
-                if (!node) return;
+                if (!node) {
+                    Wh_Log(L"[inject] Weak reference to startNode lost");
+                    return;
+                }
                 try {
                     auto frame = WalkUpToTaskbarFrame(node);
-                    if (!frame) return;
+                    if (!frame) {
+                        Wh_Log(L"[inject] WalkUpToTaskbarFrame returned null");
+                        return;
+                    }
                     auto rootGrid = FindRootGrid(frame);
-                    if (!rootGrid) return;
+                    if (!rootGrid) {
+                        Wh_Log(L"[inject] FindRootGrid returned null");
+                        return;
+                    }
+                    Wh_Log(L"[inject] Found rootGrid, injecting...");
                     InjectWidgetInto(rootGrid);
-                } catch (...) {}
+                } catch (...) {
+                    Wh_Log(L"[inject] Exception during XAML tree walk");
+                }
             });
     } catch (...) {
         g_ScanPending = false;
+        Wh_Log(L"[inject] Exception scheduling on dispatcher");
     }
 }
 
@@ -549,19 +579,22 @@ static void RemoveWidget() {
 
 // ---------- GSMTC ----------
 
-static bool UpdateOneSession(int idx) {
+static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
+    g_AsyncTasks++;
+    struct AsyncTaskGuard { ~AsyncTaskGuard() { g_AsyncTasks--; } } taskGuard;
+
     GlobalSystemMediaTransportControlsSession session{ nullptr };
     {
-        std::lock_guard<std::mutex> g(g_MediaMutex);
-        if (idx < 0 || idx >= g_MediaStateCount) return false;
+        std::lock_guard<std::mutex> lk(g_MediaMutex);
+        if (g_Unloading.load() || idx < 0 || idx >= g_MediaStateCount) co_return;
         session = g_MediaStates[idx].session;
     }
-    if (!session) return false;
+    if (!session) co_return;
 
     std::wstring title, artist;
     bool playing = false;
     try {
-        auto props = session.TryGetMediaPropertiesAsync().get();
+        auto props = co_await session.TryGetMediaPropertiesAsync();
         if (props) {
             title  = props.Title().c_str();
             artist = props.Artist().c_str();
@@ -571,19 +604,20 @@ static bool UpdateOneSession(int idx) {
             playing = (pb.PlaybackStatus()
                 == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
         }
-    } WH_LOG_CATCH(L"UpdateOneSession")
+    } WH_LOG_CATCH(L"UpdateOneSessionAsync")
 
     {
-        std::lock_guard<std::mutex> g(g_MediaMutex);
-        if (idx >= g_MediaStateCount) return false;
+        std::lock_guard<std::mutex> lk(g_MediaMutex);
+        if (g_Unloading.load() || idx >= g_MediaStateCount) co_return;
+        if (g_MediaStates[idx].session != session) co_return;
+
         auto& m = g_MediaStates[idx];
-        if (m.title == title && m.artist == artist && m.isPlaying == playing) return false;
+        if (m.title == title && m.artist == artist && m.isPlaying == playing) co_return;
         m.title     = title;
         m.artist    = artist;
         m.isPlaying = playing;
     }
     RefreshWidgetUI();
-    return true;
 }
 
 static void DetachSessionLocked(int idx) {
@@ -598,64 +632,162 @@ static void DetachSessionLocked(int idx) {
     m = MediaState{};
 }
 
-static void EnumerateSessionsAsync() {
-    Wh_Log(L"[gsmtc] creating thread");
-    std::thread([]() {
-        Wh_Log(L"[gsmtc] thread body entered");
-        // WinRT must be initialized on each thread before any API call.
-        try { init_apartment(apartment_type::multi_threaded); } catch (...) {}
-        Wh_Log(L"[gsmtc] apartment init done");
-        try {
-            if (!g_SessionManager) {
-                Wh_Log(L"[gsmtc] calling RequestAsync");
-                g_SessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-                Wh_Log(L"[gsmtc] RequestAsync complete, manager=%s", g_SessionManager ? L"ok" : L"null");
-                if (!g_SessionManager) return;
-                g_SessionsChangedToken = g_SessionManager.SessionsChanged(
-                    [](auto&&, auto&&) { EnumerateSessionsAsync(); });
-            }
-            auto sessions = g_SessionManager.GetSessions();
+static void DoEnumerateAndRefresh() {
+    Wh_Log(L"[gsmtc] DoEnumerateAndRefresh: entered");
+    GlobalSystemMediaTransportControlsSessionManager mgr{ nullptr };
+    {
+        std::lock_guard<std::mutex> lk(g_MediaMutex);
+        if (g_Unloading.load()) return;
+        mgr = g_SessionManager;
+    }
+    if (!mgr) return;
 
-            std::lock_guard<std::mutex> g(g_MediaMutex);
-            // Detach all current
-            for (int i = 0; i < g_MediaStateCount; ++i) DetachSessionLocked(i);
-            g_MediaStateCount = 0;
+    auto sessions = [&]() {
+        try { return mgr.GetSessions(); }
+        catch (...) { return decltype(mgr.GetSessions()){ nullptr }; }
+    }();
+    if (!sessions) { Wh_Log(L"[gsmtc] GetSessions failed"); return; }
 
-            int playingIdx = -1;
-            for (auto const& s : sessions) {
-                if (g_MediaStateCount >= MAX_SESSIONS) break;
-                auto& m = g_MediaStates[g_MediaStateCount];
-                m.session = s;
-                try { m.sessionId = s.SourceAppUserModelId().c_str(); } catch (...) {}
-                try {
-                    m.propsChangedToken = s.MediaPropertiesChanged(
-                        [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSession(idx); });
-                } catch (...) {}
-                try {
-                    m.playbackChangedToken = s.PlaybackInfoChanged(
-                        [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSession(idx); });
-                } catch (...) {}
-                try {
-                    auto pb = s.GetPlaybackInfo();
-                    if (pb && pb.PlaybackStatus()
-                            == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
-                        if (playingIdx == -1) playingIdx = g_MediaStateCount;
-                    }
-                } catch (...) {}
-                g_MediaStateCount++;
-            }
-            g_ActiveSessionIndex = (playingIdx >= 0) ? playingIdx : 0;
-            Wh_Log(L"[gsmtc] enumerated %d session(s), active=%d", g_MediaStateCount, g_ActiveSessionIndex);
-        } catch (...) {
-            Wh_Log(L"[gsmtc] exception in EnumerateSessionsAsync");
+    {
+        std::lock_guard<std::mutex> lk(g_MediaMutex);
+        if (g_Unloading.load()) return;
+        for (int i = 0; i < g_MediaStateCount; ++i) DetachSessionLocked(i);
+        g_MediaStateCount = 0;
+
+        int playingIdx = -1;
+        for (auto const& s : sessions) {
+            if (g_MediaStateCount >= MAX_SESSIONS) break;
+            auto& m = g_MediaStates[g_MediaStateCount];
+            m.session = s;
+            try { m.sessionId = s.SourceAppUserModelId().c_str(); } catch (...) {}
+            try {
+                m.propsChangedToken = s.MediaPropertiesChanged(
+                    [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSessionAsync(idx); });
+            } catch (...) {}
+            try {
+                m.playbackChangedToken = s.PlaybackInfoChanged(
+                    [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSessionAsync(idx); });
+            } catch (...) {}
+            try {
+                auto pb = s.GetPlaybackInfo();
+                if (pb && pb.PlaybackStatus()
+                        == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
+                    if (playingIdx == -1) playingIdx = g_MediaStateCount;
+                }
+            } catch (...) {}
+            g_MediaStateCount++;
+        }
+        g_ActiveSessionIndex = (playingIdx >= 0) ? playingIdx : 0;
+        Wh_Log(L"[gsmtc] enumerated %d session(s), active=%d", g_MediaStateCount, g_ActiveSessionIndex);
+    }
+
+    int n;
+    { std::lock_guard<std::mutex> lk(g_MediaMutex); n = g_MediaStateCount; }
+    for (int i = 0; i < n; ++i) UpdateOneSessionAsync(i);
+    RefreshWidgetUI();
+}
+
+static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
+    Wh_Log(L"[gsmtc] thread: started, tid=%lu", GetCurrentThreadId());
+    try {
+        init_apartment(apartment_type::single_threaded);
+        Wh_Log(L"[gsmtc] thread: STA init OK");
+    } catch (winrt::hresult_error const& e) {
+        Wh_Log(L"[gsmtc] thread: STA init threw hr=0x%08X %s", (unsigned)e.code(), e.message().c_str());
+    } catch (...) {
+        Wh_Log(L"[gsmtc] thread: STA init threw unknown exception");
+    }
+
+    Wh_Log(L"[gsmtc] thread: waiting for start event (g_GsmtcStartEvent=%p)", g_GsmtcStartEvent);
+    if (g_GsmtcStartEvent) {
+        DWORD wr = WaitForSingleObject(g_GsmtcStartEvent, INFINITE);
+        Wh_Log(L"[gsmtc] thread: start event wait returned %lu (OBJECT_0=0)", wr);
+    }
+
+    if (g_Unloading.load()) {
+        Wh_Log(L"[gsmtc] thread: unloading flag set after wait — exiting");
+        return 0;
+    }
+
+    Wh_Log(L"[gsmtc] thread: calling RequestAsync");
+    IAsyncOperation<GlobalSystemMediaTransportControlsSessionManager> req{ nullptr };
+    try {
+        req = GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
+    } catch (winrt::hresult_error const& e) {
+        Wh_Log(L"[gsmtc] thread: RequestAsync() threw hr=0x%08X %s", (unsigned)e.code(), e.message().c_str());
+        return 0;
+    } catch (...) {
+        Wh_Log(L"[gsmtc] thread: RequestAsync() threw unknown exception");
+        return 0;
+    }
+    Wh_Log(L"[gsmtc] thread: request created, status=%d", (int)req.Status());
+
+    {
+        std::lock_guard<std::mutex> lk(g_MediaMutex);
+        if (g_Unloading.load()) { req.Cancel(); return 0; }
+        g_PendingRequest = req;
+    }
+
+    req.Completed([req](IAsyncOperation<GlobalSystemMediaTransportControlsSessionManager> const&,
+                        AsyncStatus status) {
+        {
+            std::lock_guard<std::mutex> lk(g_MediaMutex);
+            g_PendingRequest = nullptr;
         }
 
-        // Pull initial props for each
-        int n;
-        { std::lock_guard<std::mutex> g(g_MediaMutex); n = g_MediaStateCount; }
-        for (int i = 0; i < n; ++i) UpdateOneSession(i);
-        RefreshWidgetUI();
-    }).detach();
+        Wh_Log(L"[gsmtc] Completed callback: status=%d tid=%lu", (int)status, GetCurrentThreadId());
+
+        if (status == AsyncStatus::Error) {
+            try {
+                req.GetResults();
+            } catch (winrt::hresult_error const& e) {
+                Wh_Log(L"[gsmtc] Completed: error hr=0x%08X %s", (unsigned)e.code(), e.message().c_str());
+            } catch (...) {}
+            return;
+        }
+        if (status != AsyncStatus::Completed || g_Unloading.load()) return;
+
+        GlobalSystemMediaTransportControlsSessionManager mgr{ nullptr };
+        try {
+            mgr = req.GetResults();
+        } catch (winrt::hresult_error const& e) {
+            Wh_Log(L"[gsmtc] GetResults threw hr=0x%08X %s", (unsigned)e.code(), e.message().c_str());
+            return;
+        } catch (...) {
+            Wh_Log(L"[gsmtc] GetResults threw unknown exception");
+            return;
+        }
+        if (!mgr) { Wh_Log(L"[gsmtc] manager is null after completion"); return; }
+
+        {
+            std::lock_guard<std::mutex> lk(g_MediaMutex);
+            if (g_Unloading.load()) return;
+            g_SessionManager = mgr;
+        }
+        Wh_Log(L"[gsmtc] manager set OK, registering SessionsChanged");
+
+        try {
+            g_SessionsChangedToken = g_SessionManager.SessionsChanged(
+                [](auto&&, auto&&) {
+                    Wh_Log(L"[gsmtc] SessionsChanged fired");
+                    DoEnumerateAndRefresh();
+                });
+        } catch (...) {
+            Wh_Log(L"[gsmtc] SessionsChanged registration threw");
+        }
+
+        DoEnumerateAndRefresh();
+    });
+
+    Wh_Log(L"[gsmtc] thread: Completed callback registered, entering STA message pump");
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0)) {
+        if (msg.message == WM_QUIT) break;
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    Wh_Log(L"[gsmtc] thread: STA message pump exited");
+    return 0;
 }
 
 // ---------- Fullscreen polling ----------
@@ -741,6 +873,7 @@ static bool HookTaskbarViewDllSymbols(HMODULE module) {
 
 using LoadLibraryExW_t = decltype(&LoadLibraryExW);
 static LoadLibraryExW_t LoadLibraryExW_Original = nullptr;
+
 // Post WM_SIZE to Shell_TrayWnd (and secondary bars) to trigger UpdateVisualStates
 // without waiting for user interaction. Called after hooks are applied.
 static void TriggerInitialScan() {
@@ -756,6 +889,11 @@ static void TriggerInitialScan() {
         while (hTray2) {
             PostMessageW(hTray2, WM_SIZE, SIZE_RESTORED, 0);
             hTray2 = FindWindowExW(nullptr, hTray2, L"Shell_SecondaryTrayWnd", nullptr);
+        }
+        // Signal the GSMTC thread in case the hook didn't fire yet.
+        if (g_GsmtcStartEvent) {
+            SetEvent(g_GsmtcStartEvent);
+            Wh_Log(L"[init] signaled GSMTC start event from TriggerInitialScan");
         }
     }).detach();
 }
@@ -777,13 +915,21 @@ static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE hFile, DWORD flag
 
 // ---------- Mod entry points ----------
 BOOL Wh_ModInit() {
-    Wh_Log(L"native-taskbar-media-controller: init");
+    Wh_Log(L"native-taskbar-media-controller: init (tid=%lu)", GetCurrentThreadId());
     LoadSettings();
 
-    try { init_apartment(apartment_type::multi_threaded); } catch (...) {}
+    try {
+        init_apartment(apartment_type::multi_threaded);
+        Wh_Log(L"[init] Wh_ModInit apartment init OK");
+    } catch (winrt::hresult_error const& e) {
+        Wh_Log(L"[init] Wh_ModInit apartment init threw hr=0x%08X (thread already initialized — OK)", (unsigned)e.code());
+    } catch (...) {
+        Wh_Log(L"[init] Wh_ModInit apartment init threw unknown");
+    }
 
     HMODULE taskbarView = GetModuleHandleW(L"Taskbar.View.dll");
     if (!taskbarView) taskbarView = GetModuleHandleW(L"ExplorerExtensions.dll");
+    Wh_Log(L"[init] Taskbar.View module: %p", taskbarView);
 
     if (taskbarView) {
         g_TaskbarViewDllLoaded = true;
@@ -794,11 +940,16 @@ BOOL Wh_ModInit() {
                            (void**)&LoadLibraryExW_Original);
     }
 
-    g_PollStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_PollStop   = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
+    Wh_Log(L"[init] poll thread: handle=%p", g_PollThread);
 
-    EnumerateSessionsAsync();
+    g_GsmtcStartEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_GsmtcThread     = CreateThread(nullptr, 0, GsmtcThreadFunc, nullptr, 0, &g_GsmtcThreadId);
+    Wh_Log(L"[init] GSMTC thread: handle=%p tid=%lu event=%p", g_GsmtcThread, g_GsmtcThreadId, g_GsmtcStartEvent);
+
     TriggerInitialScan();
+    Wh_Log(L"[init] Wh_ModInit complete");
     return TRUE;
 }
 
@@ -807,15 +958,27 @@ void Wh_ModUninit() {
     g_Unloading = true;
 
     if (g_PollStop) SetEvent(g_PollStop);
+    if (g_GsmtcStartEvent) SetEvent(g_GsmtcStartEvent);
+    if (g_GsmtcThreadId) PostThreadMessageW(g_GsmtcThreadId, WM_QUIT, 0, 0);
+
     if (g_PollThread) {
         WaitForSingleObject(g_PollThread, 2000);
         CloseHandle(g_PollThread);
         g_PollThread = nullptr;
     }
+    if (g_GsmtcThread) {
+        WaitForSingleObject(g_GsmtcThread, 2000);
+        CloseHandle(g_GsmtcThread);
+        g_GsmtcThread = nullptr;
+    }
     if (g_PollStop) { CloseHandle(g_PollStop); g_PollStop = nullptr; }
+    if (g_GsmtcStartEvent) { CloseHandle(g_GsmtcStartEvent); g_GsmtcStartEvent = nullptr; }
 
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
+        if (g_PendingRequest) {
+            try { g_PendingRequest.Cancel(); } catch (...) {}
+        }
         try {
             if (g_SessionManager && g_SessionsChangedToken.value) {
                 g_SessionManager.SessionsChanged(g_SessionsChangedToken);
@@ -831,6 +994,9 @@ void Wh_ModUninit() {
 
     // Spin until in-flight hooks finish.
     for (int i = 0; i < 50 && g_HookCallCounter.load() > 0; ++i) Sleep(100);
+
+    // Spin until in-flight async tasks finish.
+    for (int i = 0; i < 20 && g_AsyncTasks.load() > 0; ++i) Sleep(100);
 }
 
 void Wh_ModSettingsChanged() {
