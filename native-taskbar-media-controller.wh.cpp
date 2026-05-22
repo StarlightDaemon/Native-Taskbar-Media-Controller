@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.1.0-beta.1
+// @version         0.1.0-beta.2
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
