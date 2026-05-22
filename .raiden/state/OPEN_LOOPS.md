@@ -1,5 +1,11 @@
 # Open Loops
 
+## ~~OL-7: General cover art (XAML BitmapImage)~~ CLOSED
+
+Shipped in `bf5b4c9` (2026-05-22): square `Image` element, `BitmapImage` loaded
+via `co_await OpenReadAsync` + `SetSourceAsync`, marshalled back to UI dispatcher
+before `Source` is set. Libby null-thumbnail collapses element gracefully.
+
 ## OL-2: Phase 2 feature selection
 
 Fork synthesis is complete (see `fork-reports/synthesis-2026-05-19.md`). Phase 2 feature scope has not been decided. Operator must select which synthesis candidates to implement next.
