@@ -34,7 +34,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
 | Widget width (px) | 300 | |
 | Widget height (px) | 40 | |
 | Font size | 11 | |
-| Gap from tray (px) | 200 | Increase if the panel overlaps the clock or tray icons |
+| Gap from tray (px) | 8 | Extra spacing between the widget and the system tray |
 | Hide when fullscreen | true | |
 
 ## Requirements
@@ -52,7 +52,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
   $name: Widget height (px)
 - FontSize: 11
   $name: Font size
-- OffsetX: 200
+- OffsetX: 8
   $name: Gap between widget and system tray (px)
 - HideFullscreen: true
   $name: Hide when fullscreen
@@ -73,6 +73,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
 #undef GetCurrentTime
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -101,14 +102,37 @@ using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Input;
 using namespace Windows::UI::Xaml::Media;
 
-#define WH_LOG_CATCH(label) catch (...) { Wh_Log(L"[exception] " label); }
+// WH_CATCH logs hresult, std::exception, and unknown exceptions with a context label.
+// Usage: try { ... } WH_CATCH(L"context")
+#define WH_CATCH(ctx)                                                          \
+    catch (winrt::hresult_error const& e) {                                    \
+        Wh_Log(L"[" ctx L"] hresult 0x%08X: %s", (unsigned)e.code().value,    \
+               e.message().c_str());                                           \
+    }                                                                          \
+    catch (std::exception const& e) {                                          \
+        Wh_Log(L"[" ctx L"] std::exception (see debug log)"); (void)e;         \
+    }                                                                          \
+    catch (...) {                                                              \
+        Wh_Log(L"[" ctx L"] unknown exception");                               \
+    }
+
+// WH_TRY_OR evaluates expr, returning fallback on any exception.
+// Usage: auto s = WH_TRY_OR(props.Title().c_str(), L"Unknown");
+#define WH_TRY_OR(expr, fallback) \
+    [&]() noexcept {              \
+        try {                     \
+            return (expr);        \
+        } catch (...) {           \
+            return (fallback);    \
+        }                         \
+    }()
 
 // ---------- Settings ----------
 struct ModSettings {
     int panelWidth = 300;
     int panelHeight = 40;
     int fontSize = 11;
-    int offsetX = 200;
+    int offsetX = 8;
     bool hideFullscreen = true;
 } g_Settings;
 
@@ -132,6 +156,9 @@ struct MediaState {
     std::wstring artist;
     std::wstring sessionId;    // AUMID (SourceAppUserModelId)
     bool isPlaying = false;
+    double playbackRate = 1.0;  // listen speed; 1.0 = normal
+    bool canSkipForward  = false; // SMTC IsSkipForwardEnabled
+    bool canSkipBackward = false; // SMTC IsSkipBackwardEnabled
     int64_t positionMs = 0;
     int64_t durationMs = 0;
     GlobalSystemMediaTransportControlsSession session{ nullptr };
@@ -147,7 +174,7 @@ static GlobalSystemMediaTransportControlsSessionManager g_SessionManager{ nullpt
 static event_token g_SessionsChangedToken{};
 static IAsyncOperation<GlobalSystemMediaTransportControlsSessionManager> g_PendingRequest{ nullptr };
 static std::atomic<int> g_AsyncTasks{ 0 };
-static HANDLE g_GsmtcStartEvent = nullptr;
+static std::atomic<HANDLE> g_GsmtcStartEvent{ nullptr };
 static HANDLE g_GsmtcThread = nullptr;
 static DWORD g_GsmtcThreadId = 0;
 
@@ -157,6 +184,8 @@ constexpr std::wstring_view kTitleName      = L"NowPlayingTitle";
 constexpr std::wstring_view kArtistName     = L"NowPlayingArtist";
 constexpr std::wstring_view kPlayPauseName  = L"NowPlayingPlayPause";
 constexpr std::wstring_view kNextName       = L"NowPlayingNext";
+constexpr std::wstring_view kSkipBackName   = L"NowPlayingSkipBack";
+constexpr std::wstring_view kSkipFwdName    = L"NowPlayingSkipFwd";
 constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
 constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
 constexpr std::wstring_view kRootGridName       = L"RootGrid";
@@ -173,6 +202,7 @@ static std::atomic<int> g_HookCallCounter{ 0 };
 static std::atomic<bool> g_Unloading{ false };
 static HANDLE g_PollThread = nullptr;
 static HANDLE g_PollStop = nullptr;
+static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
 
 // ---------- Helpers ----------
 static FrameworkElement GetFrameworkElementFromNative(void* pThis) {
@@ -308,6 +338,33 @@ static Grid BuildWidget() {
     textCol.Children().Append(artist);
     layout.Children().Append(textCol);
 
+    // 2c: Skip Backward — 30-second rewind; shown only when session enables it
+    Button skipBack;
+    skipBack.Name(kSkipBackName);
+    skipBack.Content(box_value(hstring{L"«"})); // «
+    skipBack.Background(MakeBrush(0x00, 0, 0, 0));
+    skipBack.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+    skipBack.BorderThickness(ThicknessHelper::FromUniformLength(0));
+    skipBack.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
+    skipBack.Margin(ThicknessHelper::FromLengths(8, 0, 2, 0));
+    skipBack.VerticalAlignment(VerticalAlignment::Center);
+    skipBack.Visibility(Visibility::Collapsed);
+    AutomationProperties::SetName(skipBack, L"Skip backward");
+    skipBack.Click(RoutedEventHandler(
+        [](IInspectable const&, RoutedEventArgs const&) {
+            GlobalSystemMediaTransportControlsSession s{ nullptr };
+            {
+                std::lock_guard<std::mutex> g(g_MediaMutex);
+                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount) {
+                    s = g_MediaStates[g_ActiveSessionIndex].session;
+                }
+            }
+            if (s) {
+                try { s.TrySkipPreviousAsync(); } WH_CATCH(L"SkipBack/SkipPrevious")
+            }
+        }));
+    layout.Children().Append(skipBack);
+
     // Play/Pause
     Button playPause;
     playPause.Name(kPlayPauseName);
@@ -316,7 +373,7 @@ static Grid BuildWidget() {
     playPause.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
     playPause.BorderThickness(ThicknessHelper::FromUniformLength(0));
     playPause.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
-    playPause.Margin(ThicknessHelper::FromLengths(8, 0, 2, 0));
+    playPause.Margin(ThicknessHelper::FromLengths(2, 0, 2, 0));
     playPause.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetName(playPause, L"Play or pause");
     playPause.Click(RoutedEventHandler(
@@ -329,12 +386,12 @@ static Grid BuildWidget() {
                 }
             }
             if (s) {
-                try { s.TryTogglePlayPauseAsync(); } catch (...) {}
+                try { s.TryTogglePlayPauseAsync(); } WH_CATCH(L"PlayPause/TogglePlayPause")
             }
         }));
     layout.Children().Append(playPause);
 
-    // Next
+    // Next track (hidden when SkipForward is available, to avoid redundancy)
     Button next;
     next.Name(kNextName);
     next.Content(box_value(hstring{L"⏭"})); // ⏭
@@ -355,10 +412,37 @@ static Grid BuildWidget() {
                 }
             }
             if (s) {
-                try { s.TrySkipNextAsync(); } catch (...) {}
+                try { s.TrySkipNextAsync(); } WH_CATCH(L"Next/SkipNext")
             }
         }));
     layout.Children().Append(next);
+
+    // 2c: Skip Forward — 30-second advance; shown only when session enables it
+    Button skipFwd;
+    skipFwd.Name(kSkipFwdName);
+    skipFwd.Content(box_value(hstring{L"»"})); // »
+    skipFwd.Background(MakeBrush(0x00, 0, 0, 0));
+    skipFwd.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+    skipFwd.BorderThickness(ThicknessHelper::FromUniformLength(0));
+    skipFwd.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
+    skipFwd.Margin(ThicknessHelper::FromLengths(2, 0, 0, 0));
+    skipFwd.VerticalAlignment(VerticalAlignment::Center);
+    skipFwd.Visibility(Visibility::Collapsed);
+    AutomationProperties::SetName(skipFwd, L"Skip forward");
+    skipFwd.Click(RoutedEventHandler(
+        [](IInspectable const&, RoutedEventArgs const&) {
+            GlobalSystemMediaTransportControlsSession s{ nullptr };
+            {
+                std::lock_guard<std::mutex> g(g_MediaMutex);
+                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount) {
+                    s = g_MediaStates[g_ActiveSessionIndex].session;
+                }
+            }
+            if (s) {
+                try { s.TrySkipNextAsync(); } WH_CATCH(L"SkipFwd/SkipForward")
+            }
+        }));
+    layout.Children().Append(skipFwd);
 
     root.Children().Append(layout);
     return root;
@@ -390,27 +474,44 @@ static void ApplyStateToWidget(Grid widget) {
     bool hasMedia = false;
     std::wstring title, artist;
     bool isPlaying = false;
+    double playbackRate = 1.0;
+    bool canSkipForward = false, canSkipBackward = false;
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
         count = g_MediaStateCount;
         activeIdx = g_ActiveSessionIndex;
         if (activeIdx >= 0 && activeIdx < count) {
             auto& m = g_MediaStates[activeIdx];
-            title = m.title;
-            artist = m.artist;
-            isPlaying = m.isPlaying;
+            title          = m.title;
+            artist         = m.artist;
+            isPlaying      = m.isPlaying;
+            playbackRate   = m.playbackRate;
+            canSkipForward  = m.canSkipForward;
+            canSkipBackward = m.canSkipBackward;
             hasMedia = !title.empty();
         }
     }
 
-    auto titleTb   = FindByName<TextBlock>(widget, kTitleName);
-    auto artistTb  = FindByName<TextBlock>(widget, kArtistName);
-    auto playBtn   = FindByName<Button>(widget, kPlayPauseName);
-    auto sessTb    = FindByName<TextBlock>(widget, kSessionCountName);
+    // 2b: Build artist display string; append rate suffix when speed != 1.0×
+    std::wstring artistDisplay = artist;
+    if (std::fabs(playbackRate - 1.0) > 0.01) {
+        wchar_t rateBuf[16];
+        swprintf(rateBuf, 16, L"%.4g\u00D7", playbackRate); // e.g. "1.5×"
+        artistDisplay += artistDisplay.empty() ? rateBuf
+                                               : (std::wstring(L" \u00B7 ") + rateBuf);
+    }
 
-    if (titleTb)  titleTb.Text(hasMedia ? title  : L"");
-    if (artistTb) artistTb.Text(hasMedia ? artist : L"");
-    if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"⏸" : L"▶"}));
+    auto titleTb    = FindByName<TextBlock>(widget, kTitleName);
+    auto artistTb   = FindByName<TextBlock>(widget, kArtistName);
+    auto playBtn    = FindByName<Button>(widget, kPlayPauseName);
+    auto sessTb     = FindByName<TextBlock>(widget, kSessionCountName);
+    auto nextBtn    = FindByName<Button>(widget, kNextName);
+    auto skipFwdBtn = FindByName<Button>(widget, kSkipFwdName);
+    auto skipBackBtn= FindByName<Button>(widget, kSkipBackName);
+
+    if (titleTb)  titleTb.Text(hasMedia ? title         : L"");
+    if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
+    if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
     if (sessTb) {
         if (count > 1) {
             sessTb.Text(std::to_wstring(count));
@@ -420,6 +521,14 @@ static void ApplyStateToWidget(Grid widget) {
             sessTb.Visibility(Visibility::Collapsed);
         }
     }
+
+    // 2c: Show skip buttons when enabled; hide Next when SkipForward is present
+    if (skipBackBtn)
+        skipBackBtn.Visibility(canSkipBackward ? Visibility::Visible : Visibility::Collapsed);
+    if (skipFwdBtn)
+        skipFwdBtn.Visibility(canSkipForward  ? Visibility::Visible : Visibility::Collapsed);
+    if (nextBtn)
+        nextBtn.Visibility(canSkipForward ? Visibility::Collapsed : Visibility::Visible);
 
     widget.Visibility(hasMedia ? Visibility::Visible : Visibility::Collapsed);
 }
@@ -438,7 +547,7 @@ static void RefreshWidgetUI() {
             [weak]() {
                 if (auto w = weak.get()) ApplyStateToWidget(w);
             });
-    } catch (...) {}
+    } WH_CATCH(L"RefreshWidgetUI/dispatch")
 }
 
 // ---------- Injection ----------
@@ -457,7 +566,7 @@ static void InjectWidgetInto(Grid rootGrid) {
         }
         // Signal even on the "already present" path — the GSMTC thread waits
         // on this event and the widget is ready either way.
-        if (g_GsmtcStartEvent) SetEvent(g_GsmtcStartEvent);
+        if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
         return;
     }
 
@@ -481,6 +590,7 @@ static void InjectWidgetInto(Grid rootGrid) {
         g_WidgetRoot   = make_weak(widget);
         g_RootGrid     = make_weak(rootGrid);
         g_SystemTray   = tray ? make_weak(tray) : weak_ref<FrameworkElement>{ nullptr };
+        g_hTaskbarWnd.store(FindWindowW(L"Shell_TrayWnd", nullptr));
         // Detach old tray resize subscription if present.
         if (tray && g_TrayResizeToken.value) {
             try { tray.SizeChanged(g_TrayResizeToken); } catch (...) {}
@@ -497,10 +607,14 @@ static void InjectWidgetInto(Grid rootGrid) {
     }
 
     UpdateWidgetMargin();  // set initial Margin.Right = trayWidth + gap
+    // Re-run once the first layout pass completes so ActualWidth() is valid.
+    widget.Loaded([](IInspectable const&, RoutedEventArgs const&) {
+        UpdateWidgetMargin();
+    });
     ApplyStateToWidget(widget);
 
-    if (g_GsmtcStartEvent) {
-        bool signaled = SetEvent(g_GsmtcStartEvent);
+    if (HANDLE ev = g_GsmtcStartEvent.load()) {
+        bool signaled = SetEvent(ev);
         Wh_Log(L"[inject] signaled GSMTC start event (SetEvent=%d)", (int)signaled);
     }
 }
@@ -593,18 +707,37 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
 
     std::wstring title, artist;
     bool playing = false;
+    double playbackRate = 1.0;
+    bool canSkipForward = false, canSkipBackward = false;
     try {
         auto props = co_await session.TryGetMediaPropertiesAsync();
         if (props) {
             title  = props.Title().c_str();
             artist = props.Artist().c_str();
+
+            // 2a: Audiobook fallback — prefer AlbumTitle when Title is empty
+            // (Libby and some audiobook apps set chapter name in Title and book
+            // name in AlbumTitle; AlbumArtist carries the author when Artist is
+            // blank). Safe for music sessions: AlbumTitle is typically empty or
+            // identical to Title, so the guard prevents any change.
+            auto albumTitle  = std::wstring(props.AlbumTitle().c_str());
+            auto albumArtist = std::wstring(props.AlbumArtist().c_str());
+            if (title.empty()  && !albumTitle.empty())  title  = albumTitle;
+            if (artist.empty() && !albumArtist.empty()) artist = albumArtist;
         }
         auto pb = session.GetPlaybackInfo();
         if (pb) {
             playing = (pb.PlaybackStatus()
                 == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+            // 2b: Playback rate (IReference<double> — null when not supported)
+            if (auto rateRef = pb.PlaybackRate()) playbackRate = rateRef.Value();
+            // 2c: Skip forward / backward capability flags
+            if (auto ctrls = pb.Controls()) {
+                canSkipForward  = ctrls.IsSkipForwardEnabled();
+                canSkipBackward = ctrls.IsSkipBackwardEnabled();
+            }
         }
-    } WH_LOG_CATCH(L"UpdateOneSessionAsync")
+    } WH_CATCH(L"UpdateOneSessionAsync")
 
     {
         std::lock_guard<std::mutex> lk(g_MediaMutex);
@@ -612,10 +745,16 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         if (g_MediaStates[idx].session != session) co_return;
 
         auto& m = g_MediaStates[idx];
-        if (m.title == title && m.artist == artist && m.isPlaying == playing) co_return;
-        m.title     = title;
-        m.artist    = artist;
-        m.isPlaying = playing;
+        if (m.title == title && m.artist == artist && m.isPlaying == playing
+            && std::fabs(m.playbackRate - playbackRate) < 0.001
+            && m.canSkipForward == canSkipForward
+            && m.canSkipBackward == canSkipBackward) co_return;
+        m.title          = title;
+        m.artist         = artist;
+        m.isPlaying      = playing;
+        m.playbackRate   = playbackRate;
+        m.canSkipForward  = canSkipForward;
+        m.canSkipBackward = canSkipBackward;
     }
     RefreshWidgetUI();
 }
@@ -659,22 +798,22 @@ static void DoEnumerateAndRefresh() {
             if (g_MediaStateCount >= MAX_SESSIONS) break;
             auto& m = g_MediaStates[g_MediaStateCount];
             m.session = s;
-            try { m.sessionId = s.SourceAppUserModelId().c_str(); } catch (...) {}
+            m.sessionId = WH_TRY_OR(std::wstring(s.SourceAppUserModelId().c_str()), std::wstring(L""));
             try {
                 m.propsChangedToken = s.MediaPropertiesChanged(
                     [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSessionAsync(idx); });
-            } catch (...) {}
+            } WH_CATCH(L"DoEnum/MediaPropertiesChanged")
             try {
                 m.playbackChangedToken = s.PlaybackInfoChanged(
                     [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSessionAsync(idx); });
-            } catch (...) {}
+            } WH_CATCH(L"DoEnum/PlaybackInfoChanged")
             try {
                 auto pb = s.GetPlaybackInfo();
                 if (pb && pb.PlaybackStatus()
                         == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
                     if (playingIdx == -1) playingIdx = g_MediaStateCount;
                 }
-            } catch (...) {}
+            } WH_CATCH(L"DoEnum/GetPlaybackInfo")
             g_MediaStateCount++;
         }
         g_ActiveSessionIndex = (playingIdx >= 0) ? playingIdx : 0;
@@ -692,15 +831,11 @@ static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
     try {
         init_apartment(apartment_type::single_threaded);
         Wh_Log(L"[gsmtc] thread: STA init OK");
-    } catch (winrt::hresult_error const& e) {
-        Wh_Log(L"[gsmtc] thread: STA init threw hr=0x%08X %s", (unsigned)e.code(), e.message().c_str());
-    } catch (...) {
-        Wh_Log(L"[gsmtc] thread: STA init threw unknown exception");
-    }
+    } WH_CATCH(L"GsmtcThread/STA")
 
-    Wh_Log(L"[gsmtc] thread: waiting for start event (g_GsmtcStartEvent=%p)", g_GsmtcStartEvent);
-    if (g_GsmtcStartEvent) {
-        DWORD wr = WaitForSingleObject(g_GsmtcStartEvent, INFINITE);
+    Wh_Log(L"[gsmtc] thread: waiting for start event (g_GsmtcStartEvent=%p)", g_GsmtcStartEvent.load());
+    if (HANDLE ev = g_GsmtcStartEvent.load()) {
+        DWORD wr = WaitForSingleObject(ev, INFINITE);
         Wh_Log(L"[gsmtc] thread: start event wait returned %lu (OBJECT_0=0)", wr);
     }
 
@@ -772,9 +907,7 @@ static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
                     Wh_Log(L"[gsmtc] SessionsChanged fired");
                     DoEnumerateAndRefresh();
                 });
-        } catch (...) {
-            Wh_Log(L"[gsmtc] SessionsChanged registration threw");
-        }
+        } WH_CATCH(L"GsmtcThread/SessionsChanged")
 
         DoEnumerateAndRefresh();
     });
@@ -791,11 +924,12 @@ static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
 }
 
 // ---------- Fullscreen polling ----------
-static bool IsForegroundWindowFullscreen() {
+static bool IsForegroundWindowFullscreen(HMONITOR hTaskbarMon) {
+    if (!hTaskbarMon) return false;
     HWND hFore = GetForegroundWindow();
     if (!hFore) return false;
     HMONITOR hMon = MonitorFromWindow(hFore, MONITOR_DEFAULTTONEAREST);
-    if (!hMon) return false;
+    if (!hMon || hMon != hTaskbarMon) return false;
     MONITORINFO mi{ sizeof(mi) };
     if (!GetMonitorInfoW(hMon, &mi)) return false;
     RECT wr{};
@@ -809,14 +943,22 @@ static bool IsForegroundWindowFullscreen() {
 static DWORD WINAPI FullscreenPollThread(LPVOID) {
     while (WaitForSingleObject(g_PollStop, 1000) == WAIT_TIMEOUT) {
         if (!g_Settings.hideFullscreen) continue;
+        HWND hTaskbar = g_hTaskbarWnd.load();
+        HMONITOR hTaskbarMon = hTaskbar
+            ? MonitorFromWindow(hTaskbar, MONITOR_DEFAULTTONEAREST)
+            : nullptr;
         QUERY_USER_NOTIFICATION_STATE state{};
         if (FAILED(SHQueryUserNotificationState(&state))) continue;
         // QUNS_BUSY is intentionally excluded — it fires during lock screen,
         // display wake transitions, and dialogs. Only hide for genuine
         // fullscreen states where the taskbar itself would be hidden.
-        bool hide = (state == QUNS_RUNNING_D3D_FULL_SCREEN
-                  || state == QUNS_PRESENTATION_MODE
-                  || IsForegroundWindowFullscreen());
+        // QUNS_PRESENTATION_MODE is a global system-wide state (no per-monitor
+        // info available), so it always triggers hide. QUNS_RUNNING_D3D_FULL_SCREEN
+        // is gated by monitor: only hide if the D3D app is on the taskbar's monitor.
+        bool hide = (state == QUNS_PRESENTATION_MODE)
+                 || (state == QUNS_RUNNING_D3D_FULL_SCREEN
+                     && IsForegroundWindowFullscreen(hTaskbarMon))
+                 || IsForegroundWindowFullscreen(hTaskbarMon);
 
         Grid widget{ nullptr };
         {
@@ -837,7 +979,7 @@ static DWORD WINAPI FullscreenPollThread(LPVOID) {
                         }
                     }
                 });
-        } catch (...) {}
+        } WH_CATCH(L"FullscreenPoll/dispatch")
     }
     return 0;
 }
@@ -891,8 +1033,8 @@ static void TriggerInitialScan() {
             hTray2 = FindWindowExW(nullptr, hTray2, L"Shell_SecondaryTrayWnd", nullptr);
         }
         // Signal the GSMTC thread in case the hook didn't fire yet.
-        if (g_GsmtcStartEvent) {
-            SetEvent(g_GsmtcStartEvent);
+        if (HANDLE ev = g_GsmtcStartEvent.load()) {
+            SetEvent(ev);
             Wh_Log(L"[init] signaled GSMTC start event from TriggerInitialScan");
         }
     }).detach();
@@ -944,9 +1086,9 @@ BOOL Wh_ModInit() {
     g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
     Wh_Log(L"[init] poll thread: handle=%p", g_PollThread);
 
-    g_GsmtcStartEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_GsmtcStartEvent.store(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     g_GsmtcThread     = CreateThread(nullptr, 0, GsmtcThreadFunc, nullptr, 0, &g_GsmtcThreadId);
-    Wh_Log(L"[init] GSMTC thread: handle=%p tid=%lu event=%p", g_GsmtcThread, g_GsmtcThreadId, g_GsmtcStartEvent);
+    Wh_Log(L"[init] GSMTC thread: handle=%p tid=%lu event=%p", g_GsmtcThread, g_GsmtcThreadId, g_GsmtcStartEvent.load());
 
     TriggerInitialScan();
     Wh_Log(L"[init] Wh_ModInit complete");
@@ -958,7 +1100,7 @@ void Wh_ModUninit() {
     g_Unloading = true;
 
     if (g_PollStop) SetEvent(g_PollStop);
-    if (g_GsmtcStartEvent) SetEvent(g_GsmtcStartEvent);
+    if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
     if (g_GsmtcThreadId) PostThreadMessageW(g_GsmtcThreadId, WM_QUIT, 0, 0);
 
     if (g_PollThread) {
@@ -972,7 +1114,7 @@ void Wh_ModUninit() {
         g_GsmtcThread = nullptr;
     }
     if (g_PollStop) { CloseHandle(g_PollStop); g_PollStop = nullptr; }
-    if (g_GsmtcStartEvent) { CloseHandle(g_GsmtcStartEvent); g_GsmtcStartEvent = nullptr; }
+    if (HANDLE ev = g_GsmtcStartEvent.exchange(nullptr)) CloseHandle(ev);
 
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
@@ -995,8 +1137,12 @@ void Wh_ModUninit() {
     // Spin until in-flight hooks finish.
     for (int i = 0; i < 50 && g_HookCallCounter.load() > 0; ++i) Sleep(100);
 
-    // Spin until in-flight async tasks finish.
-    for (int i = 0; i < 20 && g_AsyncTasks.load() > 0; ++i) Sleep(100);
+    // Spin until in-flight async tasks finish (50 × 100 ms = 5 s, matching hook drain).
+    for (int i = 0; i < 50 && g_AsyncTasks.load() > 0; ++i) Sleep(100);
+    if (g_AsyncTasks.load() > 0) {
+        Wh_Log(L"[uninit] WARNING: async task drain timed out (%d tasks remaining)",
+               g_AsyncTasks.load());
+    }
 }
 
 void Wh_ModSettingsChanged() {
@@ -1022,7 +1168,7 @@ void Wh_ModSettingsChanged() {
                 if (auto a = FindByName<TextBlock>(g, kArtistName)) a.FontSize(fs);
                 if (auto s = FindByName<TextBlock>(g, kSessionCountName)) s.FontSize(fs);
                 ApplyStateToWidget(g);
+                UpdateWidgetMargin();  // must run on UI thread
             });
     } catch (...) {}
-    UpdateWidgetMargin();
 }
