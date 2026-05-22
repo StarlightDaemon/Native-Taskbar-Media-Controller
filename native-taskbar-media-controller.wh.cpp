@@ -91,6 +91,8 @@ z-ordering, auto-hide support, and DPI handling automatically.
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Media.Imaging.h>
+#include <winrt/Windows.Storage.Streams.h>
 
 using namespace winrt;
 using namespace Windows::Foundation;
@@ -101,6 +103,8 @@ using namespace Windows::UI::Xaml::Automation;
 using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Input;
 using namespace Windows::UI::Xaml::Media;
+using namespace Windows::UI::Xaml::Media::Imaging;
+using namespace Windows::Storage::Streams;
 
 // WH_CATCH logs hresult, std::exception, and unknown exceptions with a context label.
 // Usage: try { ... } WH_CATCH(L"context")
@@ -157,13 +161,15 @@ struct MediaState {
     std::wstring sessionId;    // AUMID (SourceAppUserModelId)
     bool isPlaying = false;
     double playbackRate = 1.0;  // listen speed; 1.0 = normal
-    bool canSkipForward  = false; // SMTC IsSkipForwardEnabled
-    bool canSkipBackward = false; // SMTC IsSkipBackwardEnabled
+    bool canSkipForward  = false; // SMTC Controls.IsNextEnabled
+    bool canSkipBackward = false; // SMTC Controls.IsPreviousEnabled
     int64_t positionMs = 0;
     int64_t durationMs = 0;
     GlobalSystemMediaTransportControlsSession session{ nullptr };
     event_token propsChangedToken{};
     event_token playbackChangedToken{};
+    IRandomAccessStreamReference thumbnailRef{ nullptr };  // null = no art (Libby, etc.)
+    uint32_t thumbnailVersion = 0;                         // incremented each time art changes
 };
 
 static MediaState g_MediaStates[MAX_SESSIONS];
@@ -187,6 +193,7 @@ constexpr std::wstring_view kNextName       = L"NowPlayingNext";
 constexpr std::wstring_view kSkipBackName   = L"NowPlayingSkipBack";
 constexpr std::wstring_view kSkipFwdName    = L"NowPlayingSkipFwd";
 constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
+constexpr std::wstring_view kAlbumArtName     = L"NowPlayingAlbumArt";
 constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
 constexpr std::wstring_view kRootGridName       = L"RootGrid";
 constexpr std::wstring_view kSystemTrayGridName = L"SystemTrayFrameGrid";
@@ -290,6 +297,18 @@ static Grid BuildWidget() {
     layout.Orientation(Orientation::Horizontal);
     layout.VerticalAlignment(VerticalAlignment::Center);
     layout.Margin(ThicknessHelper::FromLengths(8.0, 0.0, 8.0, 0.0));
+
+    // Album art — square thumbnail at the left edge of the widget.
+    // Hidden until art is loaded; size matches panel height for a flush square.
+    Image albumArt;
+    albumArt.Name(kAlbumArtName);
+    albumArt.Width((double)g_Settings.panelHeight);
+    albumArt.Height((double)g_Settings.panelHeight);
+    albumArt.Stretch(Stretch::UniformToFill);          // crop to square; no letterbox
+    albumArt.VerticalAlignment(VerticalAlignment::Stretch);
+    albumArt.Margin(ThicknessHelper::FromLengths(0, 0, 6, 0));  // 6 px gap before text
+    albumArt.Visibility(Visibility::Collapsed);        // revealed once bitmap is loaded
+    layout.Children().Append(albumArt);                // first child (inserted before session chip below)
 
     // Session count chip (collapsed by default)
     TextBlock sessionCount;
@@ -476,18 +495,22 @@ static void ApplyStateToWidget(Grid widget) {
     bool isPlaying = false;
     double playbackRate = 1.0;
     bool canSkipForward = false, canSkipBackward = false;
+    uint32_t thumbnailVersion = 0;
+    IRandomAccessStreamReference thumbnailRef{ nullptr };
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
         count = g_MediaStateCount;
         activeIdx = g_ActiveSessionIndex;
         if (activeIdx >= 0 && activeIdx < count) {
             auto& m = g_MediaStates[activeIdx];
-            title          = m.title;
-            artist         = m.artist;
-            isPlaying      = m.isPlaying;
-            playbackRate   = m.playbackRate;
-            canSkipForward  = m.canSkipForward;
-            canSkipBackward = m.canSkipBackward;
+            title            = m.title;
+            artist           = m.artist;
+            isPlaying        = m.isPlaying;
+            playbackRate     = m.playbackRate;
+            canSkipForward   = m.canSkipForward;
+            canSkipBackward  = m.canSkipBackward;
+            thumbnailVersion = m.thumbnailVersion;
+            thumbnailRef     = m.thumbnailRef;
             hasMedia = !title.empty();
         }
     }
@@ -508,6 +531,7 @@ static void ApplyStateToWidget(Grid widget) {
     auto nextBtn    = FindByName<Button>(widget, kNextName);
     auto skipFwdBtn = FindByName<Button>(widget, kSkipFwdName);
     auto skipBackBtn= FindByName<Button>(widget, kSkipBackName);
+    auto artEl      = FindByName<Image>(widget, kAlbumArtName);
 
     if (titleTb)  titleTb.Text(hasMedia ? title         : L"");
     if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
@@ -529,6 +553,43 @@ static void ApplyStateToWidget(Grid widget) {
         skipFwdBtn.Visibility(canSkipForward  ? Visibility::Visible : Visibility::Collapsed);
     if (nextBtn)
         nextBtn.Visibility(canSkipForward ? Visibility::Collapsed : Visibility::Visible);
+
+    // Album art: clear on no-media, else kick off async load
+    if (artEl) {
+        if (!hasMedia || !thumbnailRef) {
+            // No session / Libby / app with no thumbnail — collapse and clear.
+            artEl.Source(nullptr);
+            artEl.Visibility(Visibility::Collapsed);
+        } else {
+            // Art available — open stream async, decode into BitmapImage, then
+            // marshal back to the UI dispatcher before touching the Image element.
+            auto weakArt = make_weak(artEl);
+            auto ref     = thumbnailRef;
+            auto version = thumbnailVersion;
+            [](weak_ref<Image> weakEl, IRandomAccessStreamReference ref,
+               uint32_t version) -> winrt::fire_and_forget {
+                g_AsyncTasks++;
+                struct Guard { ~Guard() { g_AsyncTasks--; } } g;
+                (void)version;  // reserved for future stale-load detection
+
+                try {
+                    auto stream = co_await ref.OpenReadAsync();
+                    BitmapImage bitmap;
+                    co_await bitmap.SetSourceAsync(stream);
+
+                    // Marshal back to the UI thread before touching XAML.
+                    auto el = weakEl.get();
+                    if (!el || g_Unloading.load()) co_return;
+                    co_await el.Dispatcher().RunAsync(
+                        Windows::UI::Core::CoreDispatcherPriority::Normal,
+                        [el, bitmap]() {
+                            el.Source(bitmap);
+                            el.Visibility(Visibility::Visible);
+                        });
+                } WH_CATCH(L"ApplyStateToWidget/LoadArt")
+            }(weakArt, ref, version);
+        }
+    }
 
     widget.Visibility(hasMedia ? Visibility::Visible : Visibility::Collapsed);
 }
@@ -725,6 +786,12 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
             if (title.empty()  && !albumTitle.empty())  title  = albumTitle;
             if (artist.empty() && !albumArtist.empty()) artist = albumArtist;
         }
+
+        // Fetch thumbnail stream reference (null for Libby and apps with no art)
+        IRandomAccessStreamReference newThumbRef{ nullptr };
+        try {
+            if (props) newThumbRef = props.Thumbnail();
+        } WH_CATCH(L"UpdateOneSessionAsync/Thumbnail")
         auto pb = session.GetPlaybackInfo();
         if (pb) {
             playing = (pb.PlaybackStatus()
@@ -733,8 +800,8 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
             if (auto rateRef = pb.PlaybackRate()) playbackRate = rateRef.Value();
             // 2c: Skip forward / backward capability flags
             if (auto ctrls = pb.Controls()) {
-                canSkipForward  = ctrls.IsSkipForwardEnabled();
-                canSkipBackward = ctrls.IsSkipBackwardEnabled();
+                canSkipForward  = ctrls.IsNextEnabled();
+                canSkipBackward = ctrls.IsPreviousEnabled();
             }
         }
     } WH_CATCH(L"UpdateOneSessionAsync")
@@ -755,6 +822,13 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         m.playbackRate   = playbackRate;
         m.canSkipForward  = canSkipForward;
         m.canSkipBackward = canSkipBackward;
+
+        // Thumbnail: bump version whenever art identity changes (COM pointer comparison).
+        bool artChanged = (m.thumbnailRef != newThumbRef);
+        if (artChanged) {
+            m.thumbnailRef    = newThumbRef;
+            m.thumbnailVersion++;
+        }
     }
     RefreshWidgetUI();
 }
