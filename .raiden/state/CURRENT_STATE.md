@@ -1,15 +1,14 @@
 # Current State
 
-## Phase 1 — Complete and Released
+## Phase 1 — Complete and Released (v0.1.0-beta.2)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `0.1.0-beta.1`  
+Version: `0.1.0-beta.2`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
-Release: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller/releases/tag/v0.1.0-beta.1
+Latest release tag: `v0.1.0-beta.2`
 
 **Branch state:**
-- `main` — Phase 1 complete, README present, `v0.1.0-beta.1` tagged and pushed
-- `feature/rename-to-native-controller` — fully merged into `main`; pushed to remote
+- `main` — up to date, `v0.1.0-beta.2` tagged and pushed
 
 **What works:**
 - Native XAML injection into `Grid#RootGrid` under `Taskbar.TaskbarFrame` (no overlay window)
@@ -17,7 +16,14 @@ Release: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller/rele
 - Title/artist `TextBlock` display, play/pause toggle, next-track button
 - Session cycle chip (session count shown when >1, tap cycles `g_ActiveSessionIndex`)
 - Tray-width-aware `Margin.Right` via `UpdateWidgetMargin()` + `SizeChanged` subscription on `SystemTrayFrameGrid`
-- Fullscreen hiding via `SHQueryUserNotificationState` poll thread (1s interval)
+- Fullscreen hiding via `SHQueryUserNotificationState` poll thread (1s interval); per-monitor aware
 - Clean unload: widget removed from XAML tree, all event tokens revoked, hook counter drain
+- **Cover art:** square `Image` element, `BitmapImage` loaded via `co_await OpenReadAsync` + `SetSourceAsync`, marshalled back to UI dispatcher; null-thumbnail collapses gracefully
+- **Libby audiobook support:** AlbumTitle/AlbumArtist fallback, playback rate suffix (` · 1.5×`), `«`/`»` skip buttons gated on `IsSkipForward/BackwardEnabled`
+- **Hardening:** `g_GsmtcStartEvent` converted to `std::atomic<HANDLE>` (TOCTOU fix); uninit drain raised to 5 s with timeout warning
+
+**Open loops:**
+- OL-2: Phase 2 feature selection (operator action required — see OPEN_LOOPS.md)
+- Libby live-test follow-ups (AUMID record, title/artist swap confirmation, TimelineProperties check)
 
 **Next:** Phase 2 feature selection — see OPEN_LOOPS.md and GOALS.md.

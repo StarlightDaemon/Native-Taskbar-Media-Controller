@@ -14,6 +14,14 @@
 - **Fork Inventory:** 11 unique forks (13 entries in manifest due to duplicate conflicts) verified in `/forks/MANIFEST.md`. Baseline identified at `/forks/og_Hashah2311_taskbar-music-lounge.wh/og_Hashah2311_taskbar-music-lounge.wh.cpp`.
 - **Readiness:** Confirmed no loose top-level files in `/forks/` (except `MANIFEST.md`), `fork-reports/` is currently absent, and the Instance is fully ready for fork review invocation.
 
+## [2026-05-22] Session Close — v0.1.0-beta.2 Tagged and Pushed
+- **Objective:** Review repo state, commit pending handoffs, bump version, push.
+- **Version bumped:** `0.1.0-beta.1` → `0.1.0-beta.2` in mod header and README.
+- **Committed:** Three session handoff files (HANDOFF-COVERART, HANDOFF-HARDENING, HANDOFF-LIBBY) staged and committed alongside version bump (commit `41884f3`).
+- **Tagged:** `v0.1.0-beta.2` annotated tag created and pushed to remote.
+- **Branch:** `main` up to date on remote.
+- **PAT policy:** PAT used transiently for push; not stored or committed.
+
 ## [2026-05-21] Phase 1 Fixes, GitHub Setup, README, and v0.1.0-beta.1 Release
 - **Objective:** Review repo state, fix bugs, push to GitHub, add README, cut beta release.
 - **Bugs fixed in `native-taskbar-media-controller.wh.cpp`:**
