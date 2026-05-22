@@ -16,19 +16,16 @@ Shipped in `3f2f5a5` (2026-05-22):
 - Confirm whether title/artist swap (AlbumTitle as headline) is correct for Libby
 - Confirm Libby's `TimelineProperties` are populated → feeds SC-SP-1 priority
 
-## OL-4: `g_GsmtcStartEvent` handle TOCTOU fix (Priority: High)
+## ~~OL-4: `g_GsmtcStartEvent` handle TOCTOU fix~~ CLOSED
 
-Plain `HANDLE` global read from multiple threads without atomicity guarantee.
-`SetEvent` can be called on a closed handle if uninit races the injection path.
-Fix: convert to `std::atomic<HANDLE>`, use `.load()`/`.exchange()` at all
-call sites. Full spec in `HANDOFF-HARDENING-2026-05-22.md` — Item 1.
+Shipped 2026-05-22: `g_GsmtcStartEvent` converted to `std::atomic<HANDLE>`;
+all call sites use `.load()`/`.exchange()`; uninit snaps with `.exchange(nullptr)`
+before `CloseHandle`. No plain reads remain.
 
-## OL-5: Uninit async-task drain timeout too short (Priority: Low)
+## ~~OL-5: Uninit async-task drain timeout too short~~ CLOSED
 
-`g_AsyncTasks` drain is capped at 2 s (20 × 100 ms); hook drain is 5 s.
-If a coroutine resumes after the drain, it accesses `g_MediaStates` which may
-be cleaned up. Fix: extend drain to 50 iterations; add warning log on timeout.
-Full spec in `HANDOFF-HARDENING-2026-05-22.md` — Item 2.
+Shipped 2026-05-22: drain raised to 50 × 100 ms (5 s), matching hook drain;
+warning log added when drain times out before `g_MediaStates` cleanup.
 
 ## ~~OL-3: `feature/rename-to-native-controller` branch not merged~~ CLOSED
 
