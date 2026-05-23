@@ -64,7 +64,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
   $name: Hide when fullscreen
 - ShowProgress: true
   $name: Show track progress bar
-- AdaptiveTextColor: true
+- AdaptiveTextColor: false
   $name: Adaptive text color (matches album art brightness)
 */
 // ==/WindhawkModSettings==
@@ -157,7 +157,7 @@ struct ModSettings {
     int offsetX = 8;
     bool hideFullscreen = true;
     bool showProgress = true;
-    bool adaptiveTextColor = true;
+    bool adaptiveTextColor = false;
 } g_Settings;
 
 // Writes a plain-text line to C:\wh-media-boot.log so cold-start crashes are
@@ -208,9 +208,10 @@ struct MediaState {
     GlobalSystemMediaTransportControlsSession session{ nullptr };
     event_token propsChangedToken{};
     event_token playbackChangedToken{};
+    event_token timelineChangedToken{};
     IRandomAccessStreamReference thumbnailRef{ nullptr };  // null = no art (Libby, etc.)
     uint32_t thumbnailVersion = 0;                         // incremented each time art changes
-    bool isDarkCover = false;
+    bool isDarkCover = true;
 };
 
 static MediaState g_MediaStates[MAX_SESSIONS];
@@ -743,7 +744,7 @@ static void ApplyStateToWidget(Grid widget) {
     bool canSkipForward = false, canSkipBackward = false;
     uint32_t thumbnailVersion = 0;
     IRandomAccessStreamReference thumbnailRef{ nullptr };
-    bool isDarkCover = false;
+    bool isDarkCover = true;
     int64_t positionMs = 0, durationMs = 0;
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
@@ -1074,6 +1075,42 @@ static void RemoveWidget() {
 
 // ---------- GSMTC ----------
 
+static winrt::fire_and_forget UpdateTimelineAsync(int idx) {
+    g_AsyncTasks++;
+    struct AsyncTaskGuard { ~AsyncTaskGuard() { g_AsyncTasks--; } } taskGuard;
+
+    GlobalSystemMediaTransportControlsSession session{ nullptr };
+    {
+        std::lock_guard<std::mutex> lk(g_MediaMutex);
+        if (g_Unloading.load() || idx < 0 || idx >= g_MediaStateCount) co_return;
+        session = g_MediaStates[idx].session;
+    }
+    if (!session) co_return;
+
+    int64_t posMs = 0, durMs = 0;
+    try {
+        auto tl = session.GetTimelineProperties();
+        if (tl) {
+            auto pos   = tl.Position();
+            auto end   = tl.EndTime();
+            auto start = tl.StartTime();
+            durMs = (end - start).count() / 10'000;
+            posMs = pos.count() / 10'000;
+        }
+    } WH_CATCH(L"UpdateTimelineAsync")
+
+    {
+        std::lock_guard<std::mutex> lk(g_MediaMutex);
+        if (g_Unloading.load() || idx >= g_MediaStateCount) co_return;
+        if (g_MediaStates[idx].session != session) co_return;
+        auto& m = g_MediaStates[idx];
+        if (m.positionMs == posMs && m.durationMs == durMs) co_return;
+        m.positionMs = posMs;
+        m.durationMs = durMs;
+    }
+    RefreshWidgetUI();
+}
+
 static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
     g_AsyncTasks++;
     struct AsyncTaskGuard { ~AsyncTaskGuard() { g_AsyncTasks--; } } taskGuard;
@@ -1133,13 +1170,8 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
             auto pos   = tl.Position();
             auto end   = tl.EndTime();
             auto start = tl.StartTime();
-            int64_t dur = (end - start).count() / 10'000;  // 100ns → ms
-            int64_t pms = pos.count() / 10'000;
-            // Position is read fresh in ApplyStateToWidget on every existing refresh;
-            // a dedicated RefreshWidgetUI per tick would fire every 1s during playback
-            // for a value the UI will read anyway — intentionally skipped here.
-            posMs = pms;
-            durMs = dur;
+            posMs = pos.count() / 10'000;
+            durMs = (end - start).count() / 10'000;  // 100ns → ms
         }
     } WH_CATCH(L"UpdateOneSessionAsync/Timeline")
 
@@ -1149,6 +1181,8 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         if (g_MediaStates[idx].session != session) co_return;
 
         auto& m = g_MediaStates[idx];
+        m.positionMs = posMs;
+        m.durationMs = durMs;
         if (m.title == title && m.artist == artist && m.isPlaying == playing
             && std::fabs(m.playbackRate - playbackRate) < 0.001
             && m.canSkipForward == canSkipForward
@@ -1159,8 +1193,6 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         m.playbackRate   = playbackRate;
         m.canSkipForward  = canSkipForward;
         m.canSkipBackward = canSkipBackward;
-        m.positionMs     = posMs;
-        m.durationMs     = durMs;
 
         // Thumbnail: bump version whenever art identity changes (COM pointer comparison).
         bool artChanged = (m.thumbnailRef != newThumbRef);
@@ -1179,6 +1211,7 @@ static void DetachSessionLocked(int idx) {
         if (m.session) {
             if (m.propsChangedToken.value)    m.session.MediaPropertiesChanged(m.propsChangedToken);
             if (m.playbackChangedToken.value) m.session.PlaybackInfoChanged(m.playbackChangedToken);
+            if (m.timelineChangedToken.value) m.session.TimelinePropertiesChanged(m.timelineChangedToken);
         }
     } catch (...) {}
     m = MediaState{};
@@ -1220,6 +1253,10 @@ static void DoEnumerateAndRefresh() {
                 m.playbackChangedToken = s.PlaybackInfoChanged(
                     [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSessionAsync(idx); });
             } WH_CATCH(L"DoEnum/PlaybackInfoChanged")
+            try {
+                m.timelineChangedToken = s.TimelinePropertiesChanged(
+                    [idx = g_MediaStateCount](auto&&, auto&&) { UpdateTimelineAsync(idx); });
+            } WH_CATCH(L"DoEnum/TimelinePropertiesChanged")
             try {
                 auto pb = s.GetPlaybackInfo();
                 if (pb && pb.PlaybackStatus()
