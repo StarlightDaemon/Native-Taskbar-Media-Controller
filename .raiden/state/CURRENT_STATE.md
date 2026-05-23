@@ -3,7 +3,7 @@
 ## Phase 2 — Implemented (v0.2.0-beta.2)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `0.2.0-beta.2`  
+Version: `0.2.0-beta.3`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
 Latest release tag: `v0.1.0-beta.2.8` (Phase 2 pending operator test + push)
 
@@ -30,13 +30,15 @@ Latest release tag: `v0.1.0-beta.2.8` (Phase 2 pending operator test + push)
 Explorer crashed 100% of the time on true cold boot because `Wh_ModInit` created 3 threads and called `init_apartment(multi_threaded)` during Explorer's hazardous early-boot window. Fixed by reducing cold-start `Wh_ModInit` to a single poll thread; all other initialization deferred to `PollForTaskbarViewDll` after `Taskbar.View.dll` is confirmed loaded. Confirmed resolved by operator.
 
 **Open loops:**
-- OL-2: Phase 2 — implemented, pending operator test
+- OL-2: Phase 2 — confirmed complete (all four features operator-verified)
 - OL-9: Phase 3 background theming defined (Acrylic + Chameleon as `BackgroundStyle` setting) — not yet started
 - BootLog diagnostic calls intentionally retained through v1.0.0 — strip at release time
 
 **Phase 2 confirmed scope:** SC-CH-1 ✓, SC-UI-2 ✓, SC-M-2 ✓, SC-KV-4 ✓  
 **Phase 3 confirmed scope:** `BackgroundStyle` setting — None / Acrylic / Chameleon (SC-UI-1 concept + SC-HT-2 concept, XAML-native implementations)
 
-**SC-M-2 status:** `AttachThreadInput` + `BringWindowToTop` + `SetForegroundWindow` applied in `v0.2.0-beta.2` — still not working as of live test 2026-05-23. Root cause not yet confirmed (may be empty AUMID, EnumWindows scope issue, or focus-lock not held by Explorer at call time). Needs targeted debug next session.
+**SC-M-2 status:** Confirmed working as of live test 2026-05-23 (v0.2.0-beta.3). Two root causes fixed:
+1. `AttachThreadInput` operands were wrong — was attaching `fgTid→tgtTid`; fixed to `ourTid→fgTid` so the XAML dispatcher thread (the actual caller) acquires the foreground lock. Added `AllowSetForegroundWindow(ASFW_ANY)` as belt-and-suspenders.
+2. `ExtractExeHint` was broken for Store AUMIDs — took pre-`!` package name (`spotifyab.spotifymusic_zpdnekdrzrea0`) instead of post-`!` AppId (`spotify`); fixed to detect Store AUMIDs (pre-bang doesn't end in `.exe`) and use the post-bang AppId as the exe hint.
 
-**Next:** Diagnose SC-M-2 double-tap focus; confirm fix; then tag + push `v0.2.0-beta.2`.
+**Next:** Phase 3 — `BackgroundStyle` setting (OL-9). Tag + push `v0.2.0-beta.3`.
