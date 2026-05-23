@@ -1,5 +1,25 @@
 # Work Log
 
+## [2026-05-23] Session Close — v0.2.0-beta.2 (Phase 2 visual polish, SC-M-2 pending)
+
+**Objective:** Validate Phase 2 features live; fix visual issues reported in screenshot.
+
+**Changes shipped in v0.2.0-beta.2:**
+- **AcrylicBrush background** (Phase 3 gate pulled forward): replaced `MakeBrush(0xCC,...)` with `AcrylicBrush` (`HostBackdrop`, tint `0x1A` dark, opacity 0.6) in `BuildWidget()`; fallback to solid on compositor reject. Confirmed working in Explorer's injected XAML tree.
+- **Progress bar Rectangle replacement**: replaced `ProgressBar` (system accent color, uncontrollable template) with a `Grid` track + `Shapes::Rectangle` fill. Track: 20% fg-color; fill: 80% fg-color; width driven by `positionMs/durationMs * ActualWidth`.
+- **Full theme propagation (SC-UI-2 extension)**: buttons (`playBtn`, `nextBtn`, `skipFwdBtn`, `skipBackBtn`), session chip, progress track background, and progress fill all now flip via `fgHi` in `ApplyStateToWidget` — confirmed working on both dark and light Windows theme.
+- **SC-M-2 fix attempt**: replaced bare `SetForegroundWindow` with `AttachThreadInput(fgTid, tgtTid, TRUE)` + `BringWindowToTop` + `SetForegroundWindow` + detach. Still not working — root cause unknown.
+
+**Live test results:**
+- SC-CH-1 (auto-hide): ✓ confirmed
+- SC-UI-2 (system theme color): ✓ confirmed — text, buttons, progress all adapt
+- SC-KV-4 (progress bar): ✓ confirmed
+- SC-M-2 (double-tap focus): ✗ still failing after AttachThreadInput fix
+
+**Open:** SC-M-2 root cause to be diagnosed next session before tag + push.
+
+---
+
 ## [2026-05-22] MILESTONE — Cold-Boot Explorer Crash Resolved (v0.1.0-beta.2.8)
 
 **Objective:** Eliminate 100% reproducible Explorer crash on cold system boot.

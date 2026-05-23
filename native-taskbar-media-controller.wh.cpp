@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.2.0-beta.1
+// @version         0.2.0-beta.2
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -88,6 +88,7 @@ static const PROPERTYKEY kPKEY_AppUserModel_ID = {
 // Undefine the macro before pulling in WinRT to avoid the collision.
 #undef GetCurrentTime
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <mutex>
@@ -108,6 +109,7 @@ static const PROPERTYKEY kPKEY_AppUserModel_ID = {
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
+#include <winrt/Windows.UI.Xaml.Shapes.h>
 #include <winrt/Windows.Storage.Streams.h>
 
 using namespace winrt;
@@ -233,7 +235,8 @@ constexpr std::wstring_view kSkipBackName   = L"NowPlayingSkipBack";
 constexpr std::wstring_view kSkipFwdName    = L"NowPlayingSkipFwd";
 constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
 constexpr std::wstring_view kAlbumArtName     = L"NowPlayingAlbumArt";
-constexpr std::wstring_view kProgressBarName  = L"NowPlayingProgress";
+constexpr std::wstring_view kProgressTrackName = L"NowPlayingProgressTrack";
+constexpr std::wstring_view kProgressFillName  = L"NowPlayingProgressFill";
 constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
 constexpr std::wstring_view kRootGridName       = L"RootGrid";
 constexpr std::wstring_view kSystemTrayGridName = L"SystemTrayFrameGrid";
@@ -498,7 +501,15 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
 
     if (!ctx.best) return;
     if (IsIconic(ctx.best)) ShowWindow(ctx.best, SW_RESTORE);
+    // AttachThreadInput gives us the foreground lock so SetForegroundWindow
+    // isn't silently blocked by Windows focus-steal protection.
+    HWND hwndFg = GetForegroundWindow();
+    DWORD fgTid  = GetWindowThreadProcessId(hwndFg, nullptr);
+    DWORD tgtTid = GetWindowThreadProcessId(ctx.best, nullptr);
+    if (fgTid && tgtTid && fgTid != tgtTid) AttachThreadInput(fgTid, tgtTid, TRUE);
+    BringWindowToTop(ctx.best);
     SetForegroundWindow(ctx.best);
+    if (fgTid && tgtTid && fgTid != tgtTid) AttachThreadInput(fgTid, tgtTid, FALSE);
 }
 
 // ---------- Widget construction ----------
@@ -509,7 +520,17 @@ static Grid BuildWidget() {
     root.Height((double)g_Settings.panelHeight);
     root.HorizontalAlignment(HorizontalAlignment::Right);
     root.VerticalAlignment(VerticalAlignment::Center);
-    root.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
+    // Phase 3 gate: test AcrylicBrush in Explorer's injected XAML tree.
+    // Falls back to dark semi-transparent if compositor rejects it.
+    try {
+        AcrylicBrush acrylic;
+        acrylic.BackgroundSource(AcrylicBackgroundSource::HostBackdrop);
+        acrylic.TintColor(ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
+        acrylic.TintOpacity(0.6);
+        root.Background(acrylic);
+    } catch (...) {
+        root.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
+    }
     root.CornerRadius(CornerRadiusHelper::FromUniformRadius(8.0));
     Canvas::SetZIndex(root, 2);
     // Span all columns so right-alignment is relative to full taskbar width.
@@ -689,20 +710,23 @@ static Grid BuildWidget() {
 
     root.Children().Append(layout);
 
-    // SC-KV-4: progress bar — pinned to the bottom edge of the widget root,
-    // full width, 3 px tall, collapsed until durationMs is known.
-    ProgressBar progressBar;
-    progressBar.Name(kProgressBarName);
-    progressBar.VerticalAlignment(VerticalAlignment::Bottom);
-    progressBar.Height(3.0);
-    progressBar.Minimum(0.0);
-    progressBar.Maximum(100.0);
-    progressBar.Value(0.0);
-    progressBar.IsIndeterminate(false);
-    progressBar.Background(MakeBrush(0x00, 0, 0, 0));
-    progressBar.Foreground(MakeBrush(0x99, 0xFF, 0xFF, 0xFF));
-    progressBar.Visibility(Visibility::Collapsed);
-    root.Children().Append(progressBar);
+    // SC-KV-4: progress bar — two stacked Rectangles (track + fill) so we own
+    // the colors completely; ProgressBar's internal template uses accent color.
+    Grid progressTrack;
+    progressTrack.Name(kProgressTrackName);
+    progressTrack.VerticalAlignment(VerticalAlignment::Bottom);
+    progressTrack.Height(3.0);
+    progressTrack.Background(MakeBrush(0x33, 0xFF, 0xFF, 0xFF));  // subtle rail
+    progressTrack.Visibility(Visibility::Collapsed);
+
+    Shapes::Rectangle progressFill;
+    progressFill.Name(kProgressFillName);
+    progressFill.HorizontalAlignment(HorizontalAlignment::Left);
+    progressFill.Fill(MakeBrush(0xCC, 0xFF, 0xFF, 0xFF));         // bright fill
+    progressFill.Width(0.0);
+
+    progressTrack.Children().Append(progressFill);
+    root.Children().Append(progressTrack);
 
     // SC-M-2: double-tap the widget to raise the source app to the foreground.
     // EnumWindows is synchronous but fast enough for a user gesture on the UI thread.
@@ -795,12 +819,18 @@ static void ApplyStateToWidget(Grid widget) {
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
 
     // SC-UI-2: adaptive foreground follows Windows light/dark app theme.
-    // Light theme → near-black text; dark theme → white text (default).
+    // Light theme → near-black; dark theme → white. Applied to text, buttons,
+    // session chip, and progress bar so every element adapts together.
     bool lightTheme = g_Settings.adaptiveTextColor && IsSystemLightTheme();
-    if (titleTb)  titleTb.Foreground(MakeBrush(0xFF,
-        lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF));
-    if (artistTb) artistTb.Foreground(MakeBrush(0xB3,
-        lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF));
+    uint8_t fgHi = lightTheme ? 0x1A : 0xFF;  // primary fg channel value
+    if (titleTb)   titleTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
+    if (artistTb)  artistTb.Foreground(MakeBrush(0xB3, fgHi, fgHi, fgHi));
+    if (sessTb)    sessTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
+    auto btnFg = MakeBrush(0xFF, fgHi, fgHi, fgHi);
+    if (playBtn)    playBtn.Foreground(btnFg);
+    if (nextBtn)    nextBtn.Foreground(btnFg);
+    if (skipFwdBtn) skipFwdBtn.Foreground(btnFg);
+    if (skipBackBtn)skipBackBtn.Foreground(btnFg);
 
     if (sessTb) {
         if (count > 1) {
@@ -859,13 +889,17 @@ static void ApplyStateToWidget(Grid widget) {
         }
     }
 
-    // SC-KV-4: progress bar
-    if (auto pb = FindByName<ProgressBar>(widget, kProgressBarName)) {
-        if (g_Settings.showProgress && hasMedia && durationMs > 0) {
-            pb.Value(positionMs * 100.0 / durationMs);
-            pb.Visibility(Visibility::Visible);
-        } else {
-            pb.Visibility(Visibility::Collapsed);
+    // SC-KV-4: progress bar (Rectangle fill, width driven by position ratio)
+    if (auto track = FindByName<Grid>(widget, kProgressTrackName)) {
+        bool show = g_Settings.showProgress && hasMedia && durationMs > 0;
+        track.Visibility(show ? Visibility::Visible : Visibility::Collapsed);
+        track.Background(MakeBrush(0x33, fgHi, fgHi, fgHi));  // subtle rail
+        if (show) {
+            if (auto fill = FindByName<Shapes::Rectangle>(track, kProgressFillName)) {
+                fill.Fill(MakeBrush(0xCC, fgHi, fgHi, fgHi));  // bright fill
+                double ratio = std::clamp(positionMs / (double)durationMs, 0.0, 1.0);
+                fill.Width(ratio * track.ActualWidth());
+            }
         }
     }
 
