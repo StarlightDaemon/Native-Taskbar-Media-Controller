@@ -11,9 +11,28 @@ before `Source` is set. Libby null-thumbnail collapses element gracefully.
 Shipped in `979e033` (2026-05-22): cold-boot LoadLibraryExW hook replaced with
 `PollForTaskbarViewDll` poll thread. Tagged `v0.1.0-beta.2.8` and pushed to remote.
 
-## OL-2: Phase 2 feature selection
+## ~~OL-2: Phase 2 feature selection~~ CLOSED
 
-Fork synthesis is complete (see `fork-reports/synthesis-2026-05-19.md`). Phase 2 feature scope has not been decided. Operator must select which synthesis candidates to implement next.
+Implemented in `b58aecb` (2026-05-23) as `v0.2.0-beta.1`. All four candidates shipped:
+- **SC-CH-1** — `IsTaskbarEffectivelyVisible` auto-hide detection
+- **SC-UI-2** — Adaptive text color from album art luminance (BT.601, gated by `AdaptiveTextColor` setting)
+- **SC-M-2** — `BringSourceAppToFront` on double-tap via `PKEY_AppUserModel_ID` + exe fallback
+- **SC-KV-4** — 3px display-only progress bar from `GetTimelineProperties()` (gated by `ShowProgress` setting)
+
+Pending operator live test + tag + push of `v0.2.0-beta.1`. Phase 3 scope in OL-9.
+
+## OL-9: Phase 3 — Background theming
+
+Decided 2026-05-23. Two theming options to be implemented under a single `BackgroundStyle` setting:
+
+- **Acrylic** — `AcrylicBrush` on the XAML panel background; no art processing; needs compositor compatibility test inside Explorer's injected XAML tree first
+- **Chameleon** — `LinearGradientBrush` derived from album art via 64-bucket color quantization (SC-HT-2); runs after art loads; adaptive text color (SC-UI-2) feeds from same palette
+
+**Setting shape:** `BackgroundStyle` enum: `None` / `Acrylic` / `Chameleon`
+
+**Prerequisite:** SC-UI-2 (adaptive text color) should ship in Phase 2 first — Phase 3 Chameleon path extends it.
+
+**Gate:** Confirm `AcrylicBrush` composites correctly in Explorer's XAML tree before shipping Acrylic option. If compositor rejects it, remove that enum value; Chameleon is unaffected.
 
 ## ~~OL-6: Libby audiobook support review & refinement~~ CLOSED
 
