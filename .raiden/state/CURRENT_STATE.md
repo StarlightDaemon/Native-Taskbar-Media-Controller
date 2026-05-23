@@ -3,7 +3,7 @@
 ## Phase 2 — Implemented (v0.2.0-beta.2)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `0.2.0-beta.3`  
+Version: `0.2.0-beta.4`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
 Latest release tag: `v0.1.0-beta.2.8` (Phase 2 pending operator test + push)
 
@@ -41,4 +41,6 @@ Explorer crashed 100% of the time on true cold boot because `Wh_ModInit` created
 1. `AttachThreadInput` operands were wrong — was attaching `fgTid→tgtTid`; fixed to `ourTid→fgTid` so the XAML dispatcher thread (the actual caller) acquires the foreground lock. Added `AllowSetForegroundWindow(ASFW_ANY)` as belt-and-suspenders.
 2. `ExtractExeHint` was broken for Store AUMIDs — took pre-`!` package name (`spotifyab.spotifymusic_zpdnekdrzrea0`) instead of post-`!` AppId (`spotify`); fixed to detect Store AUMIDs (pre-bang doesn't end in `.exe`) and use the post-bang AppId as the exe hint.
 
-**Next:** Phase 3 — `BackgroundStyle` setting (OL-9). Tag + push `v0.2.0-beta.3`.
+**SC-M-2 toggle (v0.2.0-beta.4):** Double-tap now toggles — minimized window restores+raises; open window minimizes. Uses `IsIconic` heuristic, matching Windows taskbar button behavior. Not yet operator-verified.
+
+**Next:** Operator live test of toggle behavior, then tag + push `v0.2.0-beta.4`. Phase 3 — `BackgroundStyle` setting (OL-9) follows.

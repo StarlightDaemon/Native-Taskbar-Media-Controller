@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.2.0-beta.3
+// @version         0.2.0-beta.4
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -512,20 +512,22 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
     }
 
     if (!ctx.best) { BootLog("[SC-M-2] no window found"); return; }
-    { char _b[160]; wsprintfA(_b, "[SC-M-2] raising hwnd=%p score=%d", ctx.best, ctx.score); BootLog(_b); }
-    if (IsIconic(ctx.best)) ShowWindow(ctx.best, SW_RESTORE);
-    // AllowSetForegroundWindow + AttachThreadInput(ourTid, fgTid) gives the
-    // XAML dispatcher thread the foreground lock. The previous code attached
-    // fgTid→tgtTid, which left the calling thread unattached and caused
-    // SetForegroundWindow to be silently blocked by focus-steal protection.
-    AllowSetForegroundWindow(ASFW_ANY);
-    DWORD ourTid = GetCurrentThreadId();
-    HWND hwndFg  = GetForegroundWindow();
-    DWORD fgTid  = GetWindowThreadProcessId(hwndFg, nullptr);
-    if (ourTid != fgTid) AttachThreadInput(ourTid, fgTid, TRUE);
-    BringWindowToTop(ctx.best);
-    SetForegroundWindow(ctx.best);
-    if (ourTid != fgTid) AttachThreadInput(ourTid, fgTid, FALSE);
+
+    if (IsIconic(ctx.best)) {
+        { char _b[160]; wsprintfA(_b, "[SC-M-2] restoring hwnd=%p score=%d", ctx.best, ctx.score); BootLog(_b); }
+        ShowWindow(ctx.best, SW_RESTORE);
+        AllowSetForegroundWindow(ASFW_ANY);
+        DWORD ourTid = GetCurrentThreadId();
+        HWND hwndFg  = GetForegroundWindow();
+        DWORD fgTid  = GetWindowThreadProcessId(hwndFg, nullptr);
+        if (ourTid != fgTid) AttachThreadInput(ourTid, fgTid, TRUE);
+        BringWindowToTop(ctx.best);
+        SetForegroundWindow(ctx.best);
+        if (ourTid != fgTid) AttachThreadInput(ourTid, fgTid, FALSE);
+    } else {
+        { char _b[160]; wsprintfA(_b, "[SC-M-2] minimizing hwnd=%p score=%d", ctx.best, ctx.score); BootLog(_b); }
+        ShowWindow(ctx.best, SW_MINIMIZE);
+    }
 }
 
 // ---------- Widget construction ----------
