@@ -1,14 +1,14 @@
 # Current State
 
-## Phase 1 — Complete and Released (v0.1.0-beta.2)
+## Phase 1 — Complete and Released (v0.1.0-beta.2) + Cold-Boot Fix (v0.1.0-beta.2.8)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `0.1.0-beta.2`  
+Version: `0.1.0-beta.2.8`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
-Latest release tag: `v0.1.0-beta.2`
+Latest release tag: `v0.1.0-beta.2.8`
 
 **Branch state:**
-- `main` — up to date, `v0.1.0-beta.2` tagged and pushed
+- `main` — up to date, `v0.1.0-beta.2.8` tagged and pushed
 
 **What works:**
 - Native XAML injection into `Grid#RootGrid` under `Taskbar.TaskbarFrame` (no overlay window)
@@ -22,8 +22,11 @@ Latest release tag: `v0.1.0-beta.2`
 - **Libby audiobook support:** AlbumTitle/AlbumArtist fallback, playback rate suffix (` · 1.5×`), `«`/`»` skip buttons gated on `IsSkipForward/BackwardEnabled`
 - **Hardening:** `g_GsmtcStartEvent` converted to `std::atomic<HANDLE>` (TOCTOU fix); uninit drain raised to 5 s with timeout warning
 
+**Cold-boot crash — RESOLVED (2026-05-22, beta.2.8):**
+Explorer crashed 100% of the time on true cold boot because `Wh_ModInit` created 3 threads and called `init_apartment(multi_threaded)` during Explorer's hazardous early-boot window. Fixed by reducing cold-start `Wh_ModInit` to a single poll thread; all other initialization deferred to `PollForTaskbarViewDll` after `Taskbar.View.dll` is confirmed loaded. Confirmed resolved by operator.
+
 **Open loops:**
 - OL-2: Phase 2 feature selection (operator action required — see OPEN_LOOPS.md)
-- Libby live-test follow-ups (AUMID record, title/artist swap confirmation, TimelineProperties check)
+- BootLog diagnostic calls intentionally retained through v1.0.0 — cold-boot fix is new and the log catches any regression immediately; strip at release time
 
 **Next:** Phase 2 feature selection — see OPEN_LOOPS.md and GOALS.md.
