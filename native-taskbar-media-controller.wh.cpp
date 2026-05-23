@@ -6,7 +6,7 @@
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -lpropsys -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -76,7 +76,11 @@ z-ordering, auto-hide support, and DPI handling automatically.
 #include <shellapi.h>
 #include <shlobj.h>
 #include <propsys.h>
-#include <propkey.h>
+// PKEY_AppUserModel_ID is declared extern in propkey.h but not exported by the
+// MinGW/lld propsys stub. Define the key locally using its well-known GUID/PID.
+static const PROPERTYKEY kPKEY_AppUserModel_ID = {
+    { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 5
+};
 
 
 // winbase.h defines GetCurrentTime() as a macro wrapping GetTickCount().
@@ -395,7 +399,7 @@ static BOOL CALLBACK FindWindowByAppIdProc(HWND hwnd, LPARAM lParam) {
     if (SUCCEEDED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&store))) && store) {
         PROPVARIANT pv;
         PropVariantInit(&pv);
-        if (SUCCEEDED(store->GetValue(PKEY_AppUserModel_ID, &pv)) && pv.vt == VT_LPWSTR && pv.pwszVal) {
+        if (SUCCEEDED(store->GetValue(kPKEY_AppUserModel_ID, &pv)) && pv.vt == VT_LPWSTR && pv.pwszVal) {
             std::wstring id(pv.pwszVal);
             PropVariantClear(&pv);
             store->Release();
