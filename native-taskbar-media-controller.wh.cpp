@@ -64,8 +64,8 @@ z-ordering, auto-hide support, and DPI handling automatically.
   $name: Hide when fullscreen
 - ShowProgress: true
   $name: Show track progress bar
-- AdaptiveTextColor: false
-  $name: Adaptive text color (matches album art brightness)
+- AdaptiveTextColor: true
+  $name: Adaptive text color (follows Windows light/dark theme)
 */
 // ==/WindhawkModSettings==
 
@@ -109,7 +109,6 @@ static const PROPERTYKEY kPKEY_AppUserModel_ID = {
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.Storage.Streams.h>
-#include <winrt/Windows.Graphics.Imaging.h>
 
 using namespace winrt;
 using namespace Windows::Foundation;
@@ -122,7 +121,6 @@ using namespace Windows::UI::Xaml::Input;
 using namespace Windows::UI::Xaml::Media;
 using namespace Windows::UI::Xaml::Media::Imaging;
 using namespace Windows::Storage::Streams;
-using namespace Windows::Graphics::Imaging;
 
 // WH_CATCH logs hresult, std::exception, and unknown exceptions with a context label.
 // Usage: try { ... } WH_CATCH(L"context")
@@ -157,7 +155,7 @@ struct ModSettings {
     int offsetX = 8;
     bool hideFullscreen = true;
     bool showProgress = true;
-    bool adaptiveTextColor = false;
+    bool adaptiveTextColor = true;
 } g_Settings;
 
 // Writes a plain-text line to C:\wh-media-boot.log so cold-start crashes are
@@ -211,7 +209,6 @@ struct MediaState {
     event_token timelineChangedToken{};
     IRandomAccessStreamReference thumbnailRef{ nullptr };  // null = no art (Libby, etc.)
     uint32_t thumbnailVersion = 0;                         // incremented each time art changes
-    bool isDarkCover = true;
 };
 
 static MediaState g_MediaStates[MAX_SESSIONS];
@@ -339,6 +336,16 @@ static Grid FindRootGrid(FrameworkElement taskbarFrame) {
             return fe.try_as<Grid>();
     }
     return nullptr;
+}
+
+// Returns true when Windows is configured for a light app theme.
+// Reads AppsUseLightTheme from the Personalize registry key (0 = dark, 1 = light).
+static bool IsSystemLightTheme() {
+    DWORD value = 0, size = sizeof(value);
+    RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size);
+    return value != 0;
 }
 
 static SolidColorBrush MakeBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
@@ -744,7 +751,6 @@ static void ApplyStateToWidget(Grid widget) {
     bool canSkipForward = false, canSkipBackward = false;
     uint32_t thumbnailVersion = 0;
     IRandomAccessStreamReference thumbnailRef{ nullptr };
-    bool isDarkCover = true;
     int64_t positionMs = 0, durationMs = 0;
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
@@ -760,7 +766,6 @@ static void ApplyStateToWidget(Grid widget) {
             canSkipBackward  = m.canSkipBackward;
             thumbnailVersion = m.thumbnailVersion;
             thumbnailRef     = m.thumbnailRef;
-            isDarkCover      = m.isDarkCover;
             positionMs       = m.positionMs;
             durationMs       = m.durationMs;
             hasMedia = !title.empty();
@@ -789,20 +794,13 @@ static void ApplyStateToWidget(Grid widget) {
     if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
 
-    // SC-UI-2: adaptive foreground — dark cover gets white text (default),
-    // light cover gets near-black text so it remains legible.
-    if (g_Settings.adaptiveTextColor && hasMedia && thumbnailRef) {
-        if (isDarkCover) {
-            if (titleTb)  titleTb.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
-            if (artistTb) artistTb.Foreground(MakeBrush(0xB3, 0xFF, 0xFF, 0xFF));
-        } else {
-            if (titleTb)  titleTb.Foreground(MakeBrush(0xFF, 0x1A, 0x1A, 0x1A));
-            if (artistTb) artistTb.Foreground(MakeBrush(0xB3, 0x1A, 0x1A, 0x1A));
-        }
-    } else {
-        if (titleTb)  titleTb.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
-        if (artistTb) artistTb.Foreground(MakeBrush(0xB3, 0xFF, 0xFF, 0xFF));
-    }
+    // SC-UI-2: adaptive foreground follows Windows light/dark app theme.
+    // Light theme → near-black text; dark theme → white text (default).
+    bool lightTheme = g_Settings.adaptiveTextColor && IsSystemLightTheme();
+    if (titleTb)  titleTb.Foreground(MakeBrush(0xFF,
+        lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF));
+    if (artistTb) artistTb.Foreground(MakeBrush(0xB3,
+        lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF, lightTheme ? 0x1A : 0xFF));
 
     if (sessTb) {
         if (count > 1) {
@@ -838,10 +836,8 @@ static void ApplyStateToWidget(Grid widget) {
             auto weakArt = make_weak(artEl);
             auto ref     = thumbnailRef;
             auto version = thumbnailVersion;
-            bool doLuma  = g_Settings.adaptiveTextColor;
-            int  capIdx  = activeIdx;
             [](weak_ref<Image> weakEl, IRandomAccessStreamReference ref,
-               uint32_t version, bool doLuma, int capIdx) -> winrt::fire_and_forget {
+               uint32_t version) -> winrt::fire_and_forget {
                 g_AsyncTasks++;
                 struct Guard { ~Guard() { g_AsyncTasks--; } } g;
                 (void)version;  // reserved for future stale-load detection
@@ -858,47 +854,8 @@ static void ApplyStateToWidget(Grid widget) {
                     if (!el) co_return;
                     el.Source(bitmap);
                     el.Visibility(Visibility::Visible);
-
-                    // SC-UI-2: sample center-pixel luminance from a second stream decode.
-                    if (doLuma) {
-                        try {
-                            auto stream2 = co_await ref.OpenReadAsync();
-                            if (g_Unloading.load()) co_return;
-                            auto decoder = co_await BitmapDecoder::CreateAsync(stream2);
-                            if (g_Unloading.load()) co_return;
-                            auto sbmp = co_await decoder.GetSoftwareBitmapAsync(
-                                BitmapPixelFormat::Bgra8, BitmapAlphaMode::Premultiplied);
-                            if (g_Unloading.load()) co_return;
-
-                            bool dark = true;  // default: treat as dark if sampling fails
-                            if (sbmp) {
-                                auto buf    = sbmp.LockBuffer(BitmapBufferAccessMode::Read);
-                                auto ref2   = buf.CreateReference();
-                                uint8_t* data = ref2.data();
-                                uint32_t w = (uint32_t)sbmp.PixelWidth();
-                                uint32_t h = (uint32_t)sbmp.PixelHeight();
-                                uint32_t stride = (uint32_t)buf.GetPlaneDescription(0).Stride;
-                                if (data && w > 0 && h > 0 && stride > 0) {
-                                    // Sample center pixel: BGRA layout
-                                    uint32_t cx = w / 2, cy = h / 2;
-                                    uint8_t B = data[cy * stride + cx * 4 + 0];
-                                    uint8_t G = data[cy * stride + cx * 4 + 1];
-                                    uint8_t R = data[cy * stride + cx * 4 + 2];
-                                    float luma = 0.299f * R + 0.587f * G + 0.114f * B;
-                                    dark = (luma < 135.0f);
-                                }
-                            }
-
-                            {
-                                std::lock_guard<std::mutex> lk(g_MediaMutex);
-                                if (!g_Unloading.load() && capIdx < g_MediaStateCount)
-                                    g_MediaStates[capIdx].isDarkCover = dark;
-                            }
-                            RefreshWidgetUI();
-                        } WH_CATCH(L"ApplyStateToWidget/Luma")
-                    }
                 } WH_CATCH(L"ApplyStateToWidget/LoadArt")
-            }(weakArt, ref, version, doLuma, capIdx);
+            }(weakArt, ref, version);
         }
     }
 
