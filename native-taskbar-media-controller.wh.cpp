@@ -2,11 +2,11 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.1.0-beta.2.8
+// @version         0.2.0-beta.1
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -lpropsys -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -24,7 +24,11 @@ z-ordering, auto-hide support, and DPI handling automatically.
 - **Playback controls** — play/pause toggle and skip-next buttons
 - **Multi-session** — a session count chip appears when multiple media apps are active; tap it
   to cycle between sessions
-- **Fullscreen auto-hide** — panel collapses automatically when a fullscreen app is detected
+- **Fullscreen auto-hide** — panel collapses automatically when a fullscreen app is detected;
+  also hides when the taskbar slides off-screen (auto-hide taskbar mode)
+- **Adaptive text color** — title and artist text adjust to light or dark depending on album art brightness
+- **Double-click to focus** — double-click the widget to bring the source media app to the foreground
+- **Track progress bar** — a slim progress bar at the widget bottom shows playback position
 - **Configurable** — panel width/height, font size, tray gap, fullscreen behavior
 
 ## Settings
@@ -36,6 +40,8 @@ z-ordering, auto-hide support, and DPI handling automatically.
 | Font size | 11 | |
 | Gap from tray (px) | 8 | Extra spacing between the widget and the system tray |
 | Hide when fullscreen | true | |
+| Show track progress bar | true | Slim bar at the widget bottom showing playback position |
+| Adaptive text color | true | Matches text brightness to album art |
 
 ## Requirements
 
@@ -56,6 +62,10 @@ z-ordering, auto-hide support, and DPI handling automatically.
   $name: Gap between widget and system tray (px)
 - HideFullscreen: true
   $name: Hide when fullscreen
+- ShowProgress: true
+  $name: Show track progress bar
+- AdaptiveTextColor: true
+  $name: Adaptive text color (matches album art brightness)
 */
 // ==/WindhawkModSettings==
 
@@ -65,6 +75,8 @@ z-ordering, auto-hide support, and DPI handling automatically.
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <propsys.h>
+#include <propkey.h>
 
 
 // winbase.h defines GetCurrentTime() as a macro wrapping GetTickCount().
@@ -93,6 +105,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.Graphics.Imaging.h>
 
 using namespace winrt;
 using namespace Windows::Foundation;
@@ -105,6 +118,7 @@ using namespace Windows::UI::Xaml::Input;
 using namespace Windows::UI::Xaml::Media;
 using namespace Windows::UI::Xaml::Media::Imaging;
 using namespace Windows::Storage::Streams;
+using namespace Windows::Graphics::Imaging;
 
 // WH_CATCH logs hresult, std::exception, and unknown exceptions with a context label.
 // Usage: try { ... } WH_CATCH(L"context")
@@ -138,6 +152,8 @@ struct ModSettings {
     int fontSize = 11;
     int offsetX = 8;
     bool hideFullscreen = true;
+    bool showProgress = true;
+    bool adaptiveTextColor = true;
 } g_Settings;
 
 // Writes a plain-text line to C:\wh-media-boot.log so cold-start crashes are
@@ -163,7 +179,9 @@ static void LoadSettings() {
     g_Settings.panelHeight  = Wh_GetIntSetting(L"PanelHeight");
     g_Settings.fontSize     = Wh_GetIntSetting(L"FontSize");
     g_Settings.offsetX      = Wh_GetIntSetting(L"OffsetX");
-    g_Settings.hideFullscreen = Wh_GetIntSetting(L"HideFullscreen") != 0;
+    g_Settings.hideFullscreen    = Wh_GetIntSetting(L"HideFullscreen") != 0;
+    g_Settings.showProgress      = Wh_GetIntSetting(L"ShowProgress") != 0;
+    g_Settings.adaptiveTextColor = Wh_GetIntSetting(L"AdaptiveTextColor") != 0;
     if (g_Settings.panelWidth   <= 0) g_Settings.panelWidth = 300;
     if (g_Settings.panelHeight  <= 0) g_Settings.panelHeight = 40;
     if (g_Settings.fontSize     <= 0) g_Settings.fontSize = 11;
@@ -188,6 +206,7 @@ struct MediaState {
     event_token playbackChangedToken{};
     IRandomAccessStreamReference thumbnailRef{ nullptr };  // null = no art (Libby, etc.)
     uint32_t thumbnailVersion = 0;                         // incremented each time art changes
+    bool isDarkCover = false;
 };
 
 static MediaState g_MediaStates[MAX_SESSIONS];
@@ -212,6 +231,7 @@ constexpr std::wstring_view kSkipBackName   = L"NowPlayingSkipBack";
 constexpr std::wstring_view kSkipFwdName    = L"NowPlayingSkipFwd";
 constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
 constexpr std::wstring_view kAlbumArtName     = L"NowPlayingAlbumArt";
+constexpr std::wstring_view kProgressBarName  = L"NowPlayingProgress";
 constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
 constexpr std::wstring_view kRootGridName       = L"RootGrid";
 constexpr std::wstring_view kSystemTrayGridName = L"SystemTrayFrameGrid";
@@ -341,6 +361,132 @@ static void UpdateWidgetMargin() {
     double margin    = trayWidth + gap;
     Wh_Log(L"[pos] trayWidth=%.0f gap=%.0f => Margin.Right=%.0f", trayWidth, gap, margin);
     widget.Margin(ThicknessHelper::FromLengths(0, 0, margin, 0));
+}
+
+// ---------- SC-M-2: BringSourceAppToFront — Messij ----------
+
+static std::wstring ExtractExeHint(const std::wstring& aumid) {
+    // Parse "Spotify.exe!App" → "spotify" (lowercase, no extension, no !suffix)
+    auto bang = aumid.find(L'!');
+    std::wstring base = (bang != std::wstring::npos) ? aumid.substr(0, bang) : aumid;
+    auto dot = base.rfind(L'.');
+    if (dot != std::wstring::npos) {
+        std::wstring ext = base.substr(dot);
+        for (auto& c : ext) c = (wchar_t)towlower(c);
+        if (ext == L".exe") base = base.substr(0, dot);
+    }
+    for (auto& c : base) c = (wchar_t)towlower(c);
+    return base;
+}
+
+struct FindWindowCtx {
+    std::wstring aumid;
+    std::wstring hint;
+    HWND best = nullptr;
+    int  score = 0;
+};
+
+static BOOL CALLBACK FindWindowByAppIdProc(HWND hwnd, LPARAM lParam) {
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    auto* ctx = reinterpret_cast<FindWindowCtx*>(lParam);
+
+    // Primary: match via Shell property store PKEY_AppUserModel_ID
+    IPropertyStore* store = nullptr;
+    if (SUCCEEDED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&store))) && store) {
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        if (SUCCEEDED(store->GetValue(PKEY_AppUserModel_ID, &pv)) && pv.vt == VT_LPWSTR && pv.pwszVal) {
+            std::wstring id(pv.pwszVal);
+            PropVariantClear(&pv);
+            store->Release();
+            if (id == ctx->aumid) {
+                ctx->best  = hwnd;
+                ctx->score = 100;
+                return FALSE;  // exact match — stop enumeration
+            }
+        } else {
+            PropVariantClear(&pv);
+            store->Release();
+        }
+    }
+
+    // Fallback: exe-name hint match
+    if (ctx->score < 100 && !ctx->hint.empty()) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid) {
+            HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (hProc) {
+                wchar_t path[MAX_PATH] = {};
+                DWORD len = MAX_PATH;
+                if (QueryFullProcessImageNameW(hProc, 0, path, &len) && len > 0) {
+                    std::wstring exePath(path, len);
+                    auto slash = exePath.rfind(L'\\');
+                    std::wstring exeName = (slash != std::wstring::npos) ? exePath.substr(slash + 1) : exePath;
+                    auto dot = exeName.rfind(L'.');
+                    if (dot != std::wstring::npos) exeName = exeName.substr(0, dot);
+                    for (auto& c : exeName) c = (wchar_t)towlower(c);
+                    if (exeName == ctx->hint && ctx->score < 50) {
+                        ctx->best  = hwnd;
+                        ctx->score = 50;
+                    }
+                }
+                CloseHandle(hProc);
+            }
+        }
+    }
+    return TRUE;
+}
+
+static BOOL CALLBACK FindBestWindowProc(HWND hwnd, LPARAM lParam) {
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    auto* ctx = reinterpret_cast<FindWindowCtx*>(lParam);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid) return TRUE;
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hProc) return TRUE;
+    wchar_t path[MAX_PATH] = {};
+    DWORD len = MAX_PATH;
+    if (QueryFullProcessImageNameW(hProc, 0, path, &len) && len > 0) {
+        std::wstring exePath(path, len);
+        auto slash = exePath.rfind(L'\\');
+        std::wstring exeName = (slash != std::wstring::npos) ? exePath.substr(slash + 1) : exePath;
+        auto dot = exeName.rfind(L'.');
+        if (dot != std::wstring::npos) exeName = exeName.substr(0, dot);
+        for (auto& c : exeName) c = (wchar_t)towlower(c);
+        if (exeName == ctx->hint) {
+            RECT rc{};
+            GetWindowRect(hwnd, &rc);
+            int area = (rc.right - rc.left) * (rc.bottom - rc.top);
+            if (!ctx->best || area > ctx->score) {
+                ctx->best  = hwnd;
+                ctx->score = area;
+            }
+        }
+    }
+    CloseHandle(hProc);
+    return TRUE;
+}
+
+static void BringSourceAppToFront(const std::wstring& aumid) {
+    FindWindowCtx ctx;
+    ctx.aumid  = aumid;
+    ctx.hint   = ExtractExeHint(aumid);
+    EnumWindows(FindWindowByAppIdProc, reinterpret_cast<LPARAM>(&ctx));
+
+    // Secondary pass if primary yielded only a hint match (score < 100)
+    if (!ctx.best || ctx.score < 100) {
+        FindWindowCtx ctx2;
+        ctx2.aumid  = aumid;
+        ctx2.hint   = ctx.hint;
+        EnumWindows(FindBestWindowProc, reinterpret_cast<LPARAM>(&ctx2));
+        if (ctx2.best) ctx.best = ctx2.best;
+    }
+
+    if (!ctx.best) return;
+    if (IsIconic(ctx.best)) ShowWindow(ctx.best, SW_RESTORE);
+    SetForegroundWindow(ctx.best);
 }
 
 // ---------- Widget construction ----------
@@ -530,6 +676,36 @@ static Grid BuildWidget() {
     layout.Children().Append(skipFwd);
 
     root.Children().Append(layout);
+
+    // SC-KV-4: progress bar — pinned to the bottom edge of the widget root,
+    // full width, 3 px tall, collapsed until durationMs is known.
+    ProgressBar progressBar;
+    progressBar.Name(kProgressBarName);
+    progressBar.VerticalAlignment(VerticalAlignment::Bottom);
+    progressBar.Height(3.0);
+    progressBar.Minimum(0.0);
+    progressBar.Maximum(100.0);
+    progressBar.Value(0.0);
+    progressBar.IsIndeterminate(false);
+    progressBar.Background(MakeBrush(0x00, 0, 0, 0));
+    progressBar.Foreground(MakeBrush(0x99, 0xFF, 0xFF, 0xFF));
+    progressBar.Visibility(Visibility::Collapsed);
+    root.Children().Append(progressBar);
+
+    // SC-M-2: double-tap the widget to raise the source app to the foreground.
+    // EnumWindows is synchronous but fast enough for a user gesture on the UI thread.
+    root.DoubleTapped(DoubleTappedEventHandler(
+        [](IInspectable const&, DoubleTappedRoutedEventArgs const& e) {
+            std::wstring aumid;
+            {
+                std::lock_guard<std::mutex> g(g_MediaMutex);
+                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount)
+                    aumid = g_MediaStates[g_ActiveSessionIndex].sessionId;
+            }
+            if (!aumid.empty()) BringSourceAppToFront(aumid);
+            e.Handled(true);
+        }));
+
     return root;
 }
 
@@ -563,6 +739,8 @@ static void ApplyStateToWidget(Grid widget) {
     bool canSkipForward = false, canSkipBackward = false;
     uint32_t thumbnailVersion = 0;
     IRandomAccessStreamReference thumbnailRef{ nullptr };
+    bool isDarkCover = false;
+    int64_t positionMs = 0, durationMs = 0;
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
         count = g_MediaStateCount;
@@ -577,6 +755,9 @@ static void ApplyStateToWidget(Grid widget) {
             canSkipBackward  = m.canSkipBackward;
             thumbnailVersion = m.thumbnailVersion;
             thumbnailRef     = m.thumbnailRef;
+            isDarkCover      = m.isDarkCover;
+            positionMs       = m.positionMs;
+            durationMs       = m.durationMs;
             hasMedia = !title.empty();
         }
     }
@@ -602,6 +783,22 @@ static void ApplyStateToWidget(Grid widget) {
     if (titleTb)  titleTb.Text(hasMedia ? title         : L"");
     if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
+
+    // SC-UI-2: adaptive foreground — dark cover gets white text (default),
+    // light cover gets near-black text so it remains legible.
+    if (g_Settings.adaptiveTextColor && hasMedia && thumbnailRef) {
+        if (isDarkCover) {
+            if (titleTb)  titleTb.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+            if (artistTb) artistTb.Foreground(MakeBrush(0xB3, 0xFF, 0xFF, 0xFF));
+        } else {
+            if (titleTb)  titleTb.Foreground(MakeBrush(0xFF, 0x1A, 0x1A, 0x1A));
+            if (artistTb) artistTb.Foreground(MakeBrush(0xB3, 0x1A, 0x1A, 0x1A));
+        }
+    } else {
+        if (titleTb)  titleTb.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+        if (artistTb) artistTb.Foreground(MakeBrush(0xB3, 0xFF, 0xFF, 0xFF));
+    }
+
     if (sessTb) {
         if (count > 1) {
             sessTb.Text(std::to_wstring(count));
@@ -636,8 +833,10 @@ static void ApplyStateToWidget(Grid widget) {
             auto weakArt = make_weak(artEl);
             auto ref     = thumbnailRef;
             auto version = thumbnailVersion;
+            bool doLuma  = g_Settings.adaptiveTextColor;
+            int  capIdx  = activeIdx;
             [](weak_ref<Image> weakEl, IRandomAccessStreamReference ref,
-               uint32_t version) -> winrt::fire_and_forget {
+               uint32_t version, bool doLuma, int capIdx) -> winrt::fire_and_forget {
                 g_AsyncTasks++;
                 struct Guard { ~Guard() { g_AsyncTasks--; } } g;
                 (void)version;  // reserved for future stale-load detection
@@ -654,8 +853,57 @@ static void ApplyStateToWidget(Grid widget) {
                     if (!el) co_return;
                     el.Source(bitmap);
                     el.Visibility(Visibility::Visible);
+
+                    // SC-UI-2: sample center-pixel luminance from a second stream decode.
+                    if (doLuma) {
+                        try {
+                            auto stream2 = co_await ref.OpenReadAsync();
+                            if (g_Unloading.load()) co_return;
+                            auto decoder = co_await BitmapDecoder::CreateAsync(stream2);
+                            if (g_Unloading.load()) co_return;
+                            auto sbmp = co_await decoder.GetSoftwareBitmapAsync(
+                                BitmapPixelFormat::Bgra8, BitmapAlphaMode::Premultiplied);
+                            if (g_Unloading.load()) co_return;
+
+                            bool dark = true;  // default: treat as dark if sampling fails
+                            if (sbmp) {
+                                auto buf    = sbmp.LockBuffer(BitmapBufferAccessMode::Read);
+                                auto ref2   = buf.CreateReference();
+                                uint8_t* data = ref2.data();
+                                uint32_t w = (uint32_t)sbmp.PixelWidth();
+                                uint32_t h = (uint32_t)sbmp.PixelHeight();
+                                uint32_t stride = (uint32_t)buf.GetPlaneDescription(0).Stride;
+                                if (data && w > 0 && h > 0 && stride > 0) {
+                                    // Sample center pixel: BGRA layout
+                                    uint32_t cx = w / 2, cy = h / 2;
+                                    uint8_t B = data[cy * stride + cx * 4 + 0];
+                                    uint8_t G = data[cy * stride + cx * 4 + 1];
+                                    uint8_t R = data[cy * stride + cx * 4 + 2];
+                                    float luma = 0.299f * R + 0.587f * G + 0.114f * B;
+                                    dark = (luma < 135.0f);
+                                }
+                            }
+
+                            {
+                                std::lock_guard<std::mutex> lk(g_MediaMutex);
+                                if (!g_Unloading.load() && capIdx < g_MediaStateCount)
+                                    g_MediaStates[capIdx].isDarkCover = dark;
+                            }
+                            RefreshWidgetUI();
+                        } WH_CATCH(L"ApplyStateToWidget/Luma")
+                    }
                 } WH_CATCH(L"ApplyStateToWidget/LoadArt")
-            }(weakArt, ref, version);
+            }(weakArt, ref, version, doLuma, capIdx);
+        }
+    }
+
+    // SC-KV-4: progress bar
+    if (auto pb = FindByName<ProgressBar>(widget, kProgressBarName)) {
+        if (g_Settings.showProgress && hasMedia && durationMs > 0) {
+            pb.Value(positionMs * 100.0 / durationMs);
+            pb.Visibility(Visibility::Visible);
+        } else {
+            pb.Visibility(Visibility::Collapsed);
         }
     }
 
@@ -839,6 +1087,7 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
     double playbackRate = 1.0;
     bool canSkipForward = false, canSkipBackward = false;
     IRandomAccessStreamReference newThumbRef{ nullptr };
+    int64_t posMs = 0, durMs = 0;
     try {
         auto props = co_await session.TryGetMediaPropertiesAsync();
         if (props) {
@@ -874,6 +1123,22 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         }
     } WH_CATCH(L"UpdateOneSessionAsync")
 
+    try {
+        auto tl = session.GetTimelineProperties();
+        if (tl) {
+            auto pos   = tl.Position();
+            auto end   = tl.EndTime();
+            auto start = tl.StartTime();
+            int64_t dur = (end - start).count() / 10'000;  // 100ns → ms
+            int64_t pms = pos.count() / 10'000;
+            // Position is read fresh in ApplyStateToWidget on every existing refresh;
+            // a dedicated RefreshWidgetUI per tick would fire every 1s during playback
+            // for a value the UI will read anyway — intentionally skipped here.
+            posMs = pms;
+            durMs = dur;
+        }
+    } WH_CATCH(L"UpdateOneSessionAsync/Timeline")
+
     {
         std::lock_guard<std::mutex> lk(g_MediaMutex);
         if (g_Unloading.load() || idx >= g_MediaStateCount) co_return;
@@ -890,6 +1155,8 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         m.playbackRate   = playbackRate;
         m.canSkipForward  = canSkipForward;
         m.canSkipBackward = canSkipBackward;
+        m.positionMs     = posMs;
+        m.durationMs     = durMs;
 
         // Thumbnail: bump version whenever art identity changes (COM pointer comparison).
         bool artChanged = (m.thumbnailRef != newThumbRef);
@@ -1080,6 +1347,25 @@ static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
 }
 
 // ---------- Fullscreen polling ----------
+
+// SC-CH-1: IsTaskbarEffectivelyVisible — Hashah2311 & Chaython
+// Returns false when the taskbar has auto-hidden to ≤30px visible strip.
+static bool IsTaskbarEffectivelyVisible(HWND hTaskbar) {
+    if (!hTaskbar || !IsWindowVisible(hTaskbar)) return false;
+    RECT rc; GetWindowRect(hTaskbar, &rc);
+    HMONITOR hMon = MonitorFromWindow(hTaskbar, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(MONITORINFO) };
+    if (GetMonitorInfo(hMon, &mi)) {
+        RECT intersect;
+        if (IntersectRect(&intersect, &rc, &mi.rcMonitor)) {
+            int visW = intersect.right  - intersect.left;
+            int visH = intersect.bottom - intersect.top;
+            if (visW <= 30 || visH <= 30) return false;
+        } else { return false; }
+    }
+    return true;
+}
+
 static bool IsForegroundWindowFullscreen(HMONITOR hTaskbarMon) {
     if (!hTaskbarMon) return false;
     HWND hFore = GetForegroundWindow();
@@ -1112,7 +1398,8 @@ static DWORD WINAPI FullscreenPollThread(LPVOID) {
         // QUNS_PRESENTATION_MODE is a global system-wide state (no per-monitor
         // info available), so it always triggers hide. QUNS_RUNNING_D3D_FULL_SCREEN
         // is gated by monitor: only hide if the D3D app is on the taskbar's monitor.
-        bool hide = (state == QUNS_PRESENTATION_MODE)
+        bool hide = !IsTaskbarEffectivelyVisible(hTaskbar)
+                 || (state == QUNS_PRESENTATION_MODE)
                  || (state == QUNS_RUNNING_D3D_FULL_SCREEN
                      && IsForegroundWindowFullscreen(hTaskbarMon))
                  || IsForegroundWindowFullscreen(hTaskbarMon);
