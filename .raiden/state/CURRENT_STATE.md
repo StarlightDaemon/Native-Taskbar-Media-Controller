@@ -1,9 +1,9 @@
 # Current State
 
-## Phase 2 — Implemented (v0.2.0-beta.1)
+## Phase 2 — Implemented (v0.2.0-beta.2)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `0.2.0-beta.1`  
+Version: `0.2.0-beta.2`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
 Latest release tag: `v0.1.0-beta.2.8` (Phase 2 pending operator test + push)
 
@@ -37,4 +37,6 @@ Explorer crashed 100% of the time on true cold boot because `Wh_ModInit` created
 **Phase 2 confirmed scope:** SC-CH-1 ✓, SC-UI-2 ✓, SC-M-2 ✓, SC-KV-4 ✓  
 **Phase 3 confirmed scope:** `BackgroundStyle` setting — None / Acrylic / Chameleon (SC-UI-1 concept + SC-HT-2 concept, XAML-native implementations)
 
-**Next:** Operator validates Phase 2 on live Windhawk install, then tag + push `v0.2.0-beta.1`.
+**SC-M-2 status:** `AttachThreadInput` + `BringWindowToTop` + `SetForegroundWindow` applied in `v0.2.0-beta.2` — still not working as of live test 2026-05-23. Root cause not yet confirmed (may be empty AUMID, EnumWindows scope issue, or focus-lock not held by Explorer at call time). Needs targeted debug next session.
+
+**Next:** Diagnose SC-M-2 double-tap focus; confirm fix; then tag + push `v0.2.0-beta.2`.
