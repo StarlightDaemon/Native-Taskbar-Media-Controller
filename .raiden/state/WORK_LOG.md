@@ -1,5 +1,23 @@
 # Work Log
 
+## [2026-05-23] SC-M-2 Confirmed Working — v0.2.0-beta.3
+
+**Objective:** Diagnose and fix SC-M-2 double-tap focus — had been failing in every live test since beta.1.
+
+**Root causes identified and fixed:**
+
+1. **`AttachThreadInput` wrong operands** — previous code: `AttachThreadInput(fgTid, tgtTid, TRUE)`. This gave the *target app's thread* Explorer's foreground lock, which is useless — `SetForegroundWindow` is called from the XAML dispatcher thread, a third unattached thread. Fixed to `AttachThreadInput(ourTid, fgTid, TRUE)` where `ourTid = GetCurrentThreadId()`. Added `AllowSetForegroundWindow(ASFW_ANY)` as belt-and-suspenders (pattern from hibrittofas/messij forks).
+
+2. **`ExtractExeHint` broken for Store AUMIDs** — for `SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify`, old code took the pre-`!` package name and tried to strip `.exe` — finding none, returned `spotifyab.spotifymusic_zpdnekdrzrea0`. No process matches this. Fixed: if pre-bang portion doesn't end in `.exe` (Store AUMID), use the post-bang AppId (`Spotify`) as the exe hint → matches `Spotify.exe` correctly.
+
+**Also added:** BootLog diagnostics in `BringSourceAppToFront` — logs the AUMID searched, derived hint, and whether a window was found/raised.
+
+**Live test result:** Confirmed working with Spotify Windows Store app.
+
+**Phase 2 status:** All four features confirmed — SC-CH-1 ✓, SC-UI-2 ✓, SC-M-2 ✓, SC-KV-4 ✓. Ready to tag + push `v0.2.0-beta.3`.
+
+---
+
 ## [2026-05-23] Session Close — v0.2.0-beta.2 (Phase 2 visual polish, SC-M-2 pending)
 
 **Objective:** Validate Phase 2 features live; fix visual issues reported in screenshot.

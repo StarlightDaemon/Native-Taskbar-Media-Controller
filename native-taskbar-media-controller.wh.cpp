@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.2.0-beta.2
+// @version         0.2.0-beta.3
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -381,17 +381,26 @@ static void UpdateWidgetMargin() {
 // ---------- SC-M-2: BringSourceAppToFront — Messij ----------
 
 static std::wstring ExtractExeHint(const std::wstring& aumid) {
-    // Parse "Spotify.exe!App" → "spotify" (lowercase, no extension, no !suffix)
+    // Classic AUMID: "Spotify.exe!App" — pre-bang ends with .exe → strip it.
+    // Store AUMID:   "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" — pre-bang
+    //   does not end with .exe; use the post-bang AppId ("Spotify") as the
+    //   exe hint instead, which matches the actual Spotify.exe process name.
     auto bang = aumid.find(L'!');
-    std::wstring base = (bang != std::wstring::npos) ? aumid.substr(0, bang) : aumid;
-    auto dot = base.rfind(L'.');
-    if (dot != std::wstring::npos) {
-        std::wstring ext = base.substr(dot);
-        for (auto& c : ext) c = (wchar_t)towlower(c);
-        if (ext == L".exe") base = base.substr(0, dot);
+    std::wstring pre = (bang != std::wstring::npos) ? aumid.substr(0, bang) : aumid;
+    std::wstring lower_pre = pre;
+    for (auto& c : lower_pre) c = (wchar_t)towlower(c);
+    if (lower_pre.size() >= 4 &&
+        lower_pre.substr(lower_pre.size() - 4) == L".exe")
+        return lower_pre.substr(0, lower_pre.size() - 4);
+    // Store AUMID: the AppId after '!' is usually the process base name.
+    if (bang != std::wstring::npos) {
+        std::wstring post = aumid.substr(bang + 1);
+        for (auto& c : post) c = (wchar_t)towlower(c);
+        if (post.size() >= 4 && post.substr(post.size() - 4) == L".exe")
+            post = post.substr(0, post.size() - 4);
+        return post;
     }
-    for (auto& c : base) c = (wchar_t)towlower(c);
-    return base;
+    return lower_pre;
 }
 
 struct FindWindowCtx {
@@ -488,6 +497,9 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
     FindWindowCtx ctx;
     ctx.aumid  = aumid;
     ctx.hint   = ExtractExeHint(aumid);
+    { char _b[256]; wsprintfA(_b, "[SC-M-2] search aumid=%.*ls hint=%.*ls",
+        (int)aumid.size(), aumid.c_str(),
+        (int)ctx.hint.size(), ctx.hint.c_str()); BootLog(_b); }
     EnumWindows(FindWindowByAppIdProc, reinterpret_cast<LPARAM>(&ctx));
 
     // Secondary pass if primary yielded only a hint match (score < 100)
@@ -499,17 +511,21 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
         if (ctx2.best) ctx.best = ctx2.best;
     }
 
-    if (!ctx.best) return;
+    if (!ctx.best) { BootLog("[SC-M-2] no window found"); return; }
+    { char _b[160]; wsprintfA(_b, "[SC-M-2] raising hwnd=%p score=%d", ctx.best, ctx.score); BootLog(_b); }
     if (IsIconic(ctx.best)) ShowWindow(ctx.best, SW_RESTORE);
-    // AttachThreadInput gives us the foreground lock so SetForegroundWindow
-    // isn't silently blocked by Windows focus-steal protection.
-    HWND hwndFg = GetForegroundWindow();
+    // AllowSetForegroundWindow + AttachThreadInput(ourTid, fgTid) gives the
+    // XAML dispatcher thread the foreground lock. The previous code attached
+    // fgTid→tgtTid, which left the calling thread unattached and caused
+    // SetForegroundWindow to be silently blocked by focus-steal protection.
+    AllowSetForegroundWindow(ASFW_ANY);
+    DWORD ourTid = GetCurrentThreadId();
+    HWND hwndFg  = GetForegroundWindow();
     DWORD fgTid  = GetWindowThreadProcessId(hwndFg, nullptr);
-    DWORD tgtTid = GetWindowThreadProcessId(ctx.best, nullptr);
-    if (fgTid && tgtTid && fgTid != tgtTid) AttachThreadInput(fgTid, tgtTid, TRUE);
+    if (ourTid != fgTid) AttachThreadInput(ourTid, fgTid, TRUE);
     BringWindowToTop(ctx.best);
     SetForegroundWindow(ctx.best);
-    if (fgTid && tgtTid && fgTid != tgtTid) AttachThreadInput(fgTid, tgtTid, FALSE);
+    if (ourTid != fgTid) AttachThreadInput(ourTid, fgTid, FALSE);
 }
 
 // ---------- Widget construction ----------
