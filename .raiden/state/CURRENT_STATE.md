@@ -41,6 +41,6 @@ Explorer crashed 100% of the time on true cold boot because `Wh_ModInit` created
 1. `AttachThreadInput` operands were wrong — was attaching `fgTid→tgtTid`; fixed to `ourTid→fgTid` so the XAML dispatcher thread (the actual caller) acquires the foreground lock. Added `AllowSetForegroundWindow(ASFW_ANY)` as belt-and-suspenders.
 2. `ExtractExeHint` was broken for Store AUMIDs — took pre-`!` package name (`spotifyab.spotifymusic_zpdnekdrzrea0`) instead of post-`!` AppId (`spotify`); fixed to detect Store AUMIDs (pre-bang doesn't end in `.exe`) and use the post-bang AppId as the exe hint.
 
-**SC-M-2 toggle (v0.2.0-beta.4):** Double-tap now toggles — minimized window restores+raises; open window minimizes. Uses `IsIconic` heuristic, matching Windows taskbar button behavior. Not yet operator-verified.
+**SC-M-2 toggle (v0.2.0-beta.4):** Double-tap toggles — minimized window restores+raises; open window minimizes. Confirmed working with Spotify Windows Store and Libby via Chrome download integration (2026-05-23).
 
-**Next:** Operator live test of toggle behavior, then tag + push `v0.2.0-beta.4`. Phase 3 — `BackgroundStyle` setting (OL-9) follows.
+**Next:** Tag + push `v0.2.0-beta.4`. Phase 3 — `BackgroundStyle` setting (OL-9).
