@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.1.0-beta.2
+// @version         0.1.0-beta.2.8
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -140,6 +140,24 @@ struct ModSettings {
     bool hideFullscreen = true;
 } g_Settings;
 
+// Writes a plain-text line to C:\wh-media-boot.log so cold-start crashes are
+// visible even when DbgViewMini isn't running at boot time.
+static void BootLog(const char* msg) {
+    HANDLE h = CreateFileA("C:\\Users\\Public\\wh-media-boot.log",
+                           FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    char buf[512];
+    int n = wsprintfA(buf, "[%02d:%02d:%02d.%03d tid=%lu] %s\r\n",
+                      (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
+                      (int)st.wMilliseconds, GetCurrentThreadId(), msg);
+    DWORD written;
+    WriteFile(h, buf, (DWORD)n, &written, nullptr);
+    CloseHandle(h);
+}
+
 static void LoadSettings() {
     g_Settings.panelWidth   = Wh_GetIntSetting(L"PanelWidth");
     g_Settings.panelHeight  = Wh_GetIntSetting(L"PanelHeight");
@@ -212,19 +230,67 @@ static HANDLE g_PollStop = nullptr;
 static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
 
 // ---------- Helpers ----------
+// Cached vtable slot index — avoids rescanning every hook call once found.
+static std::atomic<int> g_FrameworkElementSlot{ -1 };
+
+static bool SlotHasVtablePointer(void* candidate) {
+    // Read the pointer stored at this slot (safe — candidate is within the live
+    // object). Require it to be committed MEM_IMAGE memory: vtables always live
+    // in a module's .rdata section. Data members (refcount ≈ 2, heap pointers)
+    // point into MEM_FREE or MEM_PRIVATE and are rejected before any QI call.
+    void* vtable = *reinterpret_cast<void**>(candidate);
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(vtable, &mbi, sizeof(mbi))) return false;
+    if (mbi.State != MEM_COMMIT) return false;
+    if (mbi.Type  != MEM_IMAGE)  return false;
+    constexpr DWORD kReadable = PAGE_READONLY | PAGE_READWRITE |
+                                PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                                PAGE_EXECUTE_WRITECOPY;
+    return (mbi.Protect & kReadable) && !(mbi.Protect & PAGE_GUARD);
+}
+
 static FrameworkElement GetFrameworkElementFromNative(void* pThis) {
-    // pThis points to a WinRT implements<> object. Offset +3 (24 bytes) is where
-    // the IInspectable vtable shim lives inside the object for TaskListButton.
-    // The address of that slot IS the COM interface pointer — do not dereference.
-    try {
-        void* ifacePtr = (void**)pThis + 3;
-        IInspectable insp{ nullptr };
-        copy_from_abi(insp, ifacePtr);
-        auto fe = insp.try_as<FrameworkElement>();
-        return fe;
-    } catch (...) {
-        return nullptr;
+    // Diagnostic scan — logs every slot decision so crashes can be correlated
+    // with the last log line before the fault.
+    auto trySlot = [&](int slot) -> FrameworkElement {
+        void* candidate = static_cast<char*>(pThis) + slot * sizeof(void*);
+        void* vtable    = *reinterpret_cast<void**>(candidate);
+        if (!SlotHasVtablePointer(candidate)) {
+            Wh_Log(L"[scan] slot %d: vtable=%p SKIP (not MEM_IMAGE)", slot, vtable);
+            return nullptr;
+        }
+        Wh_Log(L"[scan] slot %d: vtable=%p OK — calling QI", slot, vtable);
+        try {
+            FrameworkElement fe{ nullptr };
+            HRESULT hr = reinterpret_cast<::IUnknown*>(candidate)->QueryInterface(
+                winrt::guid_of<FrameworkElement>(), winrt::put_abi(fe));
+            Wh_Log(L"[scan] slot %d: QI hr=0x%08X fe=%s", slot, (unsigned)hr, fe ? L"valid" : L"null");
+            return (SUCCEEDED(hr) && fe) ? fe : nullptr;
+        } catch (...) {
+            Wh_Log(L"[scan] slot %d: QI threw exception", slot);
+            return nullptr;
+        }
+    };
+
+    // Fast path: reuse cached slot.
+    int cached = g_FrameworkElementSlot.load(std::memory_order_relaxed);
+    if (cached >= 0) {
+        if (auto fe = trySlot(cached)) return fe;
+        Wh_Log(L"[scan] cached slot %d no longer valid, rescanning", cached);
+        g_FrameworkElementSlot.store(-1, std::memory_order_relaxed);
     }
+
+    // Slow path: scan and cache.
+    Wh_Log(L"[scan] full scan, pThis=%p", pThis);
+    for (int slot = 0; slot <= 8; ++slot) {
+        if (auto fe = trySlot(slot)) {
+            Wh_Log(L"[scan] found FrameworkElement at slot %d", slot);
+            g_FrameworkElementSlot.store(slot, std::memory_order_relaxed);
+            return fe;
+        }
+    }
+    Wh_Log(L"[scan] no slot yielded FrameworkElement");
+    return nullptr;
 }
 
 static FrameworkElement WalkUpToTaskbarFrame(FrameworkElement start) {
@@ -561,8 +627,12 @@ static void ApplyStateToWidget(Grid widget) {
             artEl.Source(nullptr);
             artEl.Visibility(Visibility::Collapsed);
         } else {
-            // Art available — open stream async, decode into BitmapImage, then
-            // marshal back to the UI dispatcher before touching the Image element.
+            // Art available — open stream async and decode into BitmapImage.
+            // This coroutine always starts on the UI dispatcher thread (called
+            // from ApplyStateToWidget which runs inside RunAsync). C++/WinRT's
+            // apartment_aware_awaiter resumes both co_awaits on the same UI
+            // thread STA, so BitmapImage (which requires the UI thread) is
+            // always created in the correct apartment — no extra RunAsync needed.
             auto weakArt = make_weak(artEl);
             auto ref     = thumbnailRef;
             auto version = thumbnailVersion;
@@ -574,18 +644,16 @@ static void ApplyStateToWidget(Grid widget) {
 
                 try {
                     auto stream = co_await ref.OpenReadAsync();
+                    if (g_Unloading.load()) co_return;
+
                     BitmapImage bitmap;
                     co_await bitmap.SetSourceAsync(stream);
+                    if (g_Unloading.load()) co_return;
 
-                    // Marshal back to the UI thread before touching XAML.
                     auto el = weakEl.get();
-                    if (!el || g_Unloading.load()) co_return;
-                    co_await el.Dispatcher().RunAsync(
-                        Windows::UI::Core::CoreDispatcherPriority::Normal,
-                        [el, bitmap]() {
-                            el.Source(bitmap);
-                            el.Visibility(Visibility::Visible);
-                        });
+                    if (!el) co_return;
+                    el.Source(bitmap);
+                    el.Visibility(Visibility::Visible);
                 } WH_CATCH(L"ApplyStateToWidget/LoadArt")
             }(weakArt, ref, version);
         }
@@ -770,6 +838,7 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
     bool playing = false;
     double playbackRate = 1.0;
     bool canSkipForward = false, canSkipBackward = false;
+    IRandomAccessStreamReference newThumbRef{ nullptr };
     try {
         auto props = co_await session.TryGetMediaPropertiesAsync();
         if (props) {
@@ -788,7 +857,6 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         }
 
         // Fetch thumbnail stream reference (null for Libby and apps with no art)
-        IRandomAccessStreamReference newThumbRef{ nullptr };
         try {
             if (props) newThumbRef = props.Thumbnail();
         } WH_CATCH(L"UpdateOneSessionAsync/Thumbnail")
@@ -901,12 +969,21 @@ static void DoEnumerateAndRefresh() {
 }
 
 static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
+    BootLog("GsmtcThreadFunc: started");
     Wh_Log(L"[gsmtc] thread: started, tid=%lu", GetCurrentThreadId());
+    // Guard against the narrow race where the thread is created just as uninit begins.
+    if (g_Unloading.load()) {
+        BootLog("GsmtcThreadFunc: unloading on entry — exiting");
+        Wh_Log(L"[gsmtc] thread: unloading on entry — exiting");
+        return 0;
+    }
     try {
         init_apartment(apartment_type::single_threaded);
         Wh_Log(L"[gsmtc] thread: STA init OK");
+        BootLog("GsmtcThreadFunc: init_apartment OK");
     } WH_CATCH(L"GsmtcThread/STA")
 
+    BootLog("GsmtcThreadFunc: waiting for start event");
     Wh_Log(L"[gsmtc] thread: waiting for start event (g_GsmtcStartEvent=%p)", g_GsmtcStartEvent.load());
     if (HANDLE ev = g_GsmtcStartEvent.load()) {
         DWORD wr = WaitForSingleObject(ev, INFINITE);
@@ -915,20 +992,25 @@ static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
 
     if (g_Unloading.load()) {
         Wh_Log(L"[gsmtc] thread: unloading flag set after wait — exiting");
+        BootLog("GsmtcThreadFunc: unloading — exiting early");
         return 0;
     }
 
+    BootLog("GsmtcThreadFunc: calling RequestAsync");
     Wh_Log(L"[gsmtc] thread: calling RequestAsync");
     IAsyncOperation<GlobalSystemMediaTransportControlsSessionManager> req{ nullptr };
     try {
         req = GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
     } catch (winrt::hresult_error const& e) {
         Wh_Log(L"[gsmtc] thread: RequestAsync() threw hr=0x%08X %s", (unsigned)e.code(), e.message().c_str());
+        BootLog("GsmtcThreadFunc: RequestAsync threw hresult_error — exiting");
         return 0;
     } catch (...) {
         Wh_Log(L"[gsmtc] thread: RequestAsync() threw unknown exception");
+        BootLog("GsmtcThreadFunc: RequestAsync threw unknown exception — exiting");
         return 0;
     }
+    BootLog("GsmtcThreadFunc: RequestAsync returned, setting Completed callback");
     Wh_Log(L"[gsmtc] thread: request created, status=%d", (int)req.Status());
 
     {
@@ -1015,6 +1097,7 @@ static bool IsForegroundWindowFullscreen(HMONITOR hTaskbarMon) {
 }
 
 static DWORD WINAPI FullscreenPollThread(LPVOID) {
+    BootLog("FullscreenPollThread: started");
     while (WaitForSingleObject(g_PollStop, 1000) == WAIT_TIMEOUT) {
         if (!g_Settings.hideFullscreen) continue;
         HWND hTaskbar = g_hTaskbarWnd.load();
@@ -1062,13 +1145,18 @@ static DWORD WINAPI FullscreenPollThread(LPVOID) {
 using TaskListButton_UpdateVisualStates_t = void(WINAPI*)(void*);
 static TaskListButton_UpdateVisualStates_t TaskListButton_UpdateVisualStates_Original = nullptr;
 static void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
+    // RAII guard so the counter is always decremented even if the original throws.
+    struct HookGuard { ~HookGuard() { g_HookCallCounter--; } } guard;
     g_HookCallCounter++;
+    Wh_Log(L"[hook] UpdateVisualStates pThis=%p", pThis);
     TaskListButton_UpdateVisualStates_Original(pThis);
+    Wh_Log(L"[hook] original returned, calling GetFrameworkElementFromNative");
     if (!g_Unloading.load()) {
         auto elem = GetFrameworkElementFromNative(pThis);
+        Wh_Log(L"[hook] GetFrameworkElementFromNative returned %s", elem ? L"valid" : L"null");
         if (elem) ScheduleScanAsync(elem);
     }
-    g_HookCallCounter--;
+    Wh_Log(L"[hook] UpdateVisualStates hook done");
 }
 
 static bool HookTaskbarViewDllSymbols(HMODULE module) {
@@ -1087,84 +1175,137 @@ static bool HookTaskbarViewDllSymbols(HMODULE module) {
     return true;
 }
 
-using LoadLibraryExW_t = decltype(&LoadLibraryExW);
-static LoadLibraryExW_t LoadLibraryExW_Original = nullptr;
-
 // Post WM_SIZE to Shell_TrayWnd (and secondary bars) to trigger UpdateVisualStates
 // without waiting for user interaction. Called after hooks are applied.
 static void TriggerInitialScan() {
     std::thread([]() {
-        Sleep(200);
-        HWND hTray = FindWindowW(L"Shell_TrayWnd", nullptr);
+        // Poll up to 30 s for Shell_TrayWnd. This does two things:
+        // 1. Delays the WM_SIZE injection trigger until the taskbar exists.
+        // 2. Delays GSMTC initialization until the shell — and the WinRT media
+        //    transport service that comes with it — are actually ready. Signalling
+        //    GSMTC at 200 ms into a cold boot when Shell_TrayWnd doesn't exist
+        //    yet causes RequestAsync to succeed against an uninitialized service
+        //    stub; the Completed callback fires ~2 min later in a bad state and
+        //    crashes Explorer with an unhandled hardware fault.
+        BootLog("TriggerInitialScan thread: started, polling for Shell_TrayWnd");
+        HWND hTray = nullptr;
+        for (int i = 0; i < 300 && !g_Unloading.load(); ++i) {
+            Sleep(100);
+            hTray = FindWindowW(L"Shell_TrayWnd", nullptr);
+            if (hTray) break;
+        }
+        if (g_Unloading.load()) { BootLog("TriggerInitialScan thread: unloading — exit"); return; }
+
         if (hTray) {
+            BootLog("TriggerInitialScan thread: Shell_TrayWnd found, posting WM_SIZE");
             RECT rc{};
             GetClientRect(hTray, &rc);
             PostMessageW(hTray, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+            BootLog("TriggerInitialScan thread: WM_SIZE posted");
+        } else {
+            BootLog("TriggerInitialScan thread: Shell_TrayWnd not found after 30s");
         }
         HWND hTray2 = FindWindowW(L"Shell_SecondaryTrayWnd", nullptr);
         while (hTray2) {
             PostMessageW(hTray2, WM_SIZE, SIZE_RESTORED, 0);
             hTray2 = FindWindowExW(nullptr, hTray2, L"Shell_SecondaryTrayWnd", nullptr);
         }
-        // Signal the GSMTC thread in case the hook didn't fire yet.
+        // Signal the GSMTC thread only after the shell is ready.
         if (HANDLE ev = g_GsmtcStartEvent.load()) {
             SetEvent(ev);
+            BootLog("TriggerInitialScan thread: signaled GSMTC start event");
             Wh_Log(L"[init] signaled GSMTC start event from TriggerInitialScan");
         }
+        BootLog("TriggerInitialScan thread: done");
     }).detach();
 }
 
-static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE hFile, DWORD flags) {
-    HMODULE module = LoadLibraryExW_Original(name, hFile, flags);
-    if (module && !g_TaskbarViewDllLoaded.load() && name) {
-        if (wcsstr(name, L"Taskbar.View.dll") || wcsstr(name, L"ExplorerExtensions.dll")) {
+// Polls for Taskbar.View.dll (or ExplorerExtensions.dll on older builds) every
+// 100 ms for up to 60 s, then installs the UpdateVisualStates hook. Using
+// GetModuleHandleW polling instead of a LoadLibraryExW hook avoids the
+// cold-start trampoline race: on boot Explorer loads dozens of DLLs on multiple
+// threads simultaneously, and patching LoadLibraryExW while another thread is
+// executing it causes an unhandled hardware fault that kills Explorer.
+static void PollForTaskbarViewDll() {
+    std::thread([]() {
+        BootLog("[poll] PollForTaskbarViewDll: started");
+        for (int i = 0; i < 600 && !g_Unloading.load(); ++i) {
+            Sleep(100);
+            HMODULE m = GetModuleHandleW(L"Taskbar.View.dll");
+            if (!m) m = GetModuleHandleW(L"ExplorerExtensions.dll");
+            if (!m) continue;
+
             bool already = g_TaskbarViewDllLoaded.exchange(true);
-            if (!already) {
-                HookTaskbarViewDllSymbols(module);
-                Wh_ApplyHookOperations();
-                TriggerInitialScan();
+            if (already) break;
+
+            BootLog("[poll] Taskbar.View.dll detected — hooking symbols");
+            Wh_Log(L"[coldstart] Taskbar.View.dll detected via poll, module=%p", m);
+            HookTaskbarViewDllSymbols(m);
+            BootLog("[poll] HookTaskbarViewDllSymbols done");
+            Wh_Log(L"[coldstart] HookTaskbarViewDllSymbols done");
+            Wh_ApplyHookOperations();
+            BootLog("[poll] Wh_ApplyHookOperations done");
+            Wh_Log(L"[coldstart] Wh_ApplyHookOperations done");
+            // All deferred initialization: hooks are installed and XAML is confirmed
+            // loaded, so it is safe to create threads that touch COM/WinRT state.
+            if (!g_Unloading.load()) {
+                g_PollStop   = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
+                BootLog("[poll] fullscreen poll thread created");
+                g_GsmtcStartEvent.store(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+                g_GsmtcThread = CreateThread(nullptr, 0, GsmtcThreadFunc, nullptr, 0, &g_GsmtcThreadId);
+                BootLog("[poll] GSMTC thread created");
+                Wh_Log(L"[coldstart] GSMTC thread: handle=%p tid=%lu", g_GsmtcThread, g_GsmtcThreadId);
             }
+            if (!g_Unloading.load()) {
+                TriggerInitialScan();
+                BootLog("[poll] TriggerInitialScan called — done");
+            }
+            break;
         }
-    }
-    return module;
+        if (!g_TaskbarViewDllLoaded.load())
+            BootLog("[poll] Taskbar.View.dll not found after 60s");
+    }).detach();
 }
 
 // ---------- Mod entry points ----------
 BOOL Wh_ModInit() {
+    BootLog("Wh_ModInit started");
     Wh_Log(L"native-taskbar-media-controller: init (tid=%lu)", GetCurrentThreadId());
     LoadSettings();
-
-    try {
-        init_apartment(apartment_type::multi_threaded);
-        Wh_Log(L"[init] Wh_ModInit apartment init OK");
-    } catch (winrt::hresult_error const& e) {
-        Wh_Log(L"[init] Wh_ModInit apartment init threw hr=0x%08X (thread already initialized — OK)", (unsigned)e.code());
-    } catch (...) {
-        Wh_Log(L"[init] Wh_ModInit apartment init threw unknown");
-    }
 
     HMODULE taskbarView = GetModuleHandleW(L"Taskbar.View.dll");
     if (!taskbarView) taskbarView = GetModuleHandleW(L"ExplorerExtensions.dll");
     Wh_Log(L"[init] Taskbar.View module: %p", taskbarView);
 
     if (taskbarView) {
+        // Direct path: DLL already loaded. Initialize everything immediately.
+        BootLog("Wh_ModInit: Taskbar.View.dll already loaded — direct path");
         g_TaskbarViewDllLoaded = true;
         if (!HookTaskbarViewDllSymbols(taskbarView)) return FALSE;
+        BootLog("Wh_ModInit: HookTaskbarViewDllSymbols done");
+
+        g_PollStop   = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
+        BootLog("Wh_ModInit: poll thread created");
+
+        g_GsmtcStartEvent.store(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        g_GsmtcThread = CreateThread(nullptr, 0, GsmtcThreadFunc, nullptr, 0, &g_GsmtcThreadId);
+        Wh_Log(L"[init] GSMTC thread: handle=%p tid=%lu", g_GsmtcThread, g_GsmtcThreadId);
+        BootLog("Wh_ModInit: GSMTC thread created");
+
+        TriggerInitialScan();
+        BootLog("Wh_ModInit: TriggerInitialScan called — init complete");
     } else {
-        Wh_SetFunctionHook((void*)LoadLibraryExW,
-                           (void*)LoadLibraryExW_Hook,
-                           (void**)&LoadLibraryExW_Original);
+        // Cold-start path: DLL not yet loaded. Create exactly one poll thread and
+        // return immediately. PollForTaskbarViewDll creates all other threads after
+        // the DLL appears and hooks are applied — avoiding any thread creation or
+        // COM initialization during Explorer's hazardous early-boot window.
+        BootLog("Wh_ModInit: Taskbar.View.dll not loaded — starting poll thread");
+        PollForTaskbarViewDll();
+        BootLog("Wh_ModInit: poll thread started — all other init deferred");
     }
 
-    g_PollStop   = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
-    Wh_Log(L"[init] poll thread: handle=%p", g_PollThread);
-
-    g_GsmtcStartEvent.store(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    g_GsmtcThread     = CreateThread(nullptr, 0, GsmtcThreadFunc, nullptr, 0, &g_GsmtcThreadId);
-    Wh_Log(L"[init] GSMTC thread: handle=%p tid=%lu event=%p", g_GsmtcThread, g_GsmtcThreadId, g_GsmtcStartEvent.load());
-
-    TriggerInitialScan();
     Wh_Log(L"[init] Wh_ModInit complete");
     return TRUE;
 }
