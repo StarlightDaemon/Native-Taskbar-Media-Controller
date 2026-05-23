@@ -1,5 +1,20 @@
 # Work Log
 
+## [2026-05-22] MILESTONE — Cold-Boot Explorer Crash Resolved (v0.1.0-beta.2.8)
+
+**Objective:** Eliminate 100% reproducible Explorer crash on cold system boot.
+
+**Root cause (confirmed):** On true cold boot, Windhawk injects into Explorer before `Taskbar.View.dll` is loaded. The previous cold-start path in `Wh_ModInit` created three threads (`FullscreenPollThread`, `PollForTaskbarViewDll`, `TriggerInitialScan`) and called `init_apartment(multi_threaded)` during Explorer's hazardous early-boot window. Boot log analysis showed all threads logging "started" at the exact same millisecond, then Explorer dying within 100ms — before any thread's first `Sleep(100)` expired. No hooks were installed; the crash was caused by thread creation and COM initialization during early boot, not by hook or GSMTC code.
+
+**Fix (beta.2.8):** Made the cold-start path in `Wh_ModInit` create exactly **one thread** (the poll thread) and return immediately — no `init_apartment`, no `FullscreenPollThread`, no `g_GsmtcStartEvent`, no `TriggerInitialScan`. All deferred initialization now runs from `PollForTaskbarViewDll` after `Taskbar.View.dll` is detected and `Wh_ApplyHookOperations` completes, at which point XAML is confirmed loaded and the boot window has passed.
+
+**Investigation path (multiple sessions):**
+- beta.2.6: Diagnosed via boot log; `init_apartment(single_threaded)` in `GsmtcThreadFunc` implicated → fixed by deferring GSMTC thread to after DLL detection (beta.2.7)
+- beta.2.7: Boot log showed crash still occurring within 100ms of Wh_ModInit, with 3 threads sleeping and no hooks — ruling out hook code and GSMTC as cause
+- beta.2.8: Reduced cold-start footprint to one thread; crash resolved — confirmed by operator
+
+**Confirmed working:** Cold boot no longer crashes Explorer.
+
 ## [2026-05-18] Fork File Organization Session
 - **Objective:** Organize all fork files into `/forks/{author}/{fork-name}/` and produce an inventory manifest.
 - **Forks Organized:** 13 fork files found; consolidated into 11 unique organized fork locations.
