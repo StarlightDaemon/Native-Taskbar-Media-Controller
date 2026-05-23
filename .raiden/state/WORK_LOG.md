@@ -1,5 +1,21 @@
 # Work Log
 
+## [2026-05-23] SC-M-2 Toggle Minimize Confirmed — v0.2.0-beta.4
+
+**Objective:** Add toggle-minimize to SC-M-2 double-tap gesture.
+
+**Change:** `BringSourceAppToFront` now branches on `IsIconic`:
+- Minimized → restore + raise (existing path, unchanged)
+- Not minimized → `ShowWindow(SW_MINIMIZE)` — one new line
+
+Matches Windows taskbar button toggle behavior. Sidesteps focus-detection problem (Explorer has focus at tap time) by using window state rather than foreground state as the branch condition.
+
+**Confirmed working (2026-05-23):**
+- Spotify Windows 11 Store app — toggle raise/minimize ✓
+- Libby via Chrome download integration — toggle raise/minimize ✓
+
+---
+
 ## [2026-05-23] SC-M-2 Confirmed Working — v0.2.0-beta.3
 
 **Objective:** Diagnose and fix SC-M-2 double-tap focus — had been failing in every live test since beta.1.
