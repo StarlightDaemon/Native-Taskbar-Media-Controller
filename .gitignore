@@ -33,3 +33,7 @@ ehthumbs.db
 *~
 *.bak
 *.tmp
+
+# Runtime diagnostics
+*.evtx
+*.log
