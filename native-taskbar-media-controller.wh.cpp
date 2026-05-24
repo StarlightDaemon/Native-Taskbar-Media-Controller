@@ -89,7 +89,17 @@ z-ordering, auto-hide support, and DPI handling automatically.
 #include <shellapi.h>
 #include <shlobj.h>
 #include <propsys.h>
-#include <windows.graphics.imaging.interop.h>  // IMemoryBufferByteAccess
+// IMemoryBufferByteAccess — not in Windhawk's MinGW toolchain headers.
+// Declare the COM interface and register its GUID via __mingw_uuidof specialization
+// (MinGW maps __uuidof to __mingw_uuidof; __declspec(uuid(...)) is silently ignored).
+struct IMemoryBufferByteAccess : IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE GetBuffer(uint8_t** value, uint32_t* capacity) = 0;
+};
+static constexpr GUID IMemoryBufferByteAccess_iid{
+    0x5b0d3235,0x4dba,0x4d44,{0x86,0x5e,0x8f,0x1d,0x0e,0xf4,0xf5,0xe0}
+};
+template<> constexpr const GUID& __mingw_uuidof<IMemoryBufferByteAccess>()  { return IMemoryBufferByteAccess_iid; }
+template<> constexpr const GUID& __mingw_uuidof<IMemoryBufferByteAccess*>() { return IMemoryBufferByteAccess_iid; }
 // PKEY_AppUserModel_ID is declared extern in propkey.h but not exported by the
 // MinGW/lld propsys stub. Define the key locally using its well-known GUID/PID.
 static const PROPERTYKEY kPKEY_AppUserModel_ID = {
@@ -223,8 +233,8 @@ struct MediaState {
     std::wstring sessionId;    // AUMID (SourceAppUserModelId)
     bool isPlaying = false;
     double playbackRate = 1.0;  // listen speed; 1.0 = normal
-    bool canSkipForward  = false; // SMTC Controls.IsNextEnabled
-    bool canSkipBackward = false; // SMTC Controls.IsPreviousEnabled
+    bool canSkipForward  = false; // SMTC Controls.IsNextEnabled — next track/chapter
+    bool canSkipBackward = false; // SMTC Controls.IsPreviousEnabled — previous track/chapter
     int64_t positionMs = 0;
     int64_t durationMs = 0;
     GlobalSystemMediaTransportControlsSession session{ nullptr };
@@ -252,7 +262,6 @@ constexpr std::wstring_view kWidgetRootName = L"TaskbarMediaWidgetRoot";
 constexpr std::wstring_view kTitleName      = L"NowPlayingTitle";
 constexpr std::wstring_view kArtistName     = L"NowPlayingArtist";
 constexpr std::wstring_view kPlayPauseName  = L"NowPlayingPlayPause";
-constexpr std::wstring_view kNextName       = L"NowPlayingNext";
 constexpr std::wstring_view kSkipBackName   = L"NowPlayingSkipBack";
 constexpr std::wstring_view kSkipFwdName    = L"NowPlayingSkipFwd";
 constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
@@ -606,7 +615,7 @@ static Grid BuildWidget() {
     layout.VerticalAlignment(VerticalAlignment::Center);
     layout.Margin(ThicknessHelper::FromLengths(8.0, 0.0, 8.0, 0.0));
 
-    auto& cols = layout.ColumnDefinitions();
+    auto cols = layout.ColumnDefinitions();
     for (int i = 0; i < 6; ++i) {
         ColumnDefinition cd;
         cd.Width(i == 2
@@ -658,9 +667,15 @@ static Grid BuildWidget() {
     // Clip container — clips overflow; marquee TranslateTransform scrolls inside it.
     Border titleClip;
     titleClip.Name(kTitleClipName);
-    titleClip.ClipToBounds(true);
     titleClip.HorizontalAlignment(HorizontalAlignment::Stretch);
     g_TitleClip = make_weak(titleClip);
+    // WinRT XAML has no ClipToBounds; attach a RectangleGeometry clip and keep it
+    // sized to the border via SizeChanged so the scrolling title doesn't overflow.
+    RectangleGeometry titleClipGeom;
+    titleClip.Clip(titleClipGeom);
+    titleClip.SizeChanged([titleClipGeom](IInspectable const&, SizeChangedEventArgs const& e) {
+        titleClipGeom.Rect({0.0f, 0.0f, e.NewSize().Width, e.NewSize().Height});
+    });
 
     TranslateTransform titleXform;
     g_TitleXform = make_weak(titleXform);
@@ -696,7 +711,7 @@ static Grid BuildWidget() {
     Grid::SetColumn(textCol, 2);
     layout.Children().Append(textCol);
 
-    // 2c: Skip Backward — 30-second rewind; shown only when session enables it
+    // 2c: Skip Backward — previous track/chapter; shown only when session enables it
     Button skipBack;
     skipBack.Name(kSkipBackName);
     skipBack.Content(box_value(hstring{L"«"})); // «
@@ -751,34 +766,7 @@ static Grid BuildWidget() {
     Grid::SetColumn(playPause, 4);
     layout.Children().Append(playPause);
 
-    // Next track (hidden when SkipForward is available, to avoid redundancy)
-    Button next;
-    next.Name(kNextName);
-    next.Content(box_value(hstring{L"⏭"})); // ⏭
-    next.Background(MakeBrush(0x00, 0, 0, 0));
-    next.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
-    next.BorderThickness(ThicknessHelper::FromUniformLength(0));
-    next.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
-    next.Margin(ThicknessHelper::FromLengths(2, 0, 0, 0));
-    next.VerticalAlignment(VerticalAlignment::Center);
-    AutomationProperties::SetName(next, L"Next track");
-    next.Click(RoutedEventHandler(
-        [](IInspectable const&, RoutedEventArgs const&) {
-            GlobalSystemMediaTransportControlsSession s{ nullptr };
-            {
-                std::lock_guard<std::mutex> g(g_MediaMutex);
-                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount) {
-                    s = g_MediaStates[g_ActiveSessionIndex].session;
-                }
-            }
-            if (s) {
-                try { s.TrySkipNextAsync(); } WH_CATCH(L"Next/SkipNext")
-            }
-        }));
-    Grid::SetColumn(next, 5);
-    layout.Children().Append(next);
-
-    // 2c: Skip Forward — 30-second advance; shown only when session enables it
+    // 2c: Skip Forward — next track/chapter; shown only when session enables it
     Button skipFwd;
     skipFwd.Name(kSkipFwdName);
     skipFwd.Content(box_value(hstring{L"»"})); // »
@@ -893,7 +881,7 @@ ComputeDominantColors(SoftwareBitmap const& bmp) {
     uint32_t capacity = 0;
     uint8_t const* px = nullptr;
     {
-        auto byteAccess = ref.as<::Windows::Foundation::IMemoryBufferByteAccess>();
+        auto byteAccess = ref.as<IMemoryBufferByteAccess>();
         byteAccess->GetBuffer(const_cast<uint8_t**>(&px), &capacity);
     }
     if (!px) return { ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A),
@@ -1002,14 +990,13 @@ static void ApplyStateToWidget(Grid widget) {
     auto artistTb   = FindByName<TextBlock>(widget, kArtistName);
     auto playBtn    = FindByName<Button>(widget, kPlayPauseName);
     auto sessTb     = FindByName<TextBlock>(widget, kSessionCountName);
-    auto nextBtn    = FindByName<Button>(widget, kNextName);
     auto skipFwdBtn = FindByName<Button>(widget, kSkipFwdName);
     auto skipBackBtn= FindByName<Button>(widget, kSkipBackName);
     auto artEl      = FindByName<Image>(widget, kAlbumArtName);
 
     if (titleTb) {
         titleTb.Text(hasMedia ? title : L"");
-        // When marquee is on: trimming is disabled; Border.ClipToBounds handles clipping.
+        // When marquee is on: trimming is disabled; RectangleGeometry clip on the Border handles clipping.
         // When marquee is off: standard CharacterEllipsis fallback.
         titleTb.TextTrimming(g_Settings.marqueeTitle ? TextTrimming::None
                                                      : TextTrimming::CharacterEllipsis);
@@ -1043,7 +1030,6 @@ static void ApplyStateToWidget(Grid widget) {
     if (sessTb)    sessTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
     auto btnFg = MakeBrush(0xFF, fgHi, fgHi, fgHi);
     if (playBtn)    playBtn.Foreground(btnFg);
-    if (nextBtn)    nextBtn.Foreground(btnFg);
     if (skipFwdBtn) skipFwdBtn.Foreground(btnFg);
     if (skipBackBtn)skipBackBtn.Foreground(btnFg);
 
@@ -1057,13 +1043,11 @@ static void ApplyStateToWidget(Grid widget) {
         }
     }
 
-    // 2c: Show skip buttons when enabled; hide Next when SkipForward is present
+    // 2c: Show skip buttons based on session capability
     if (skipBackBtn)
         skipBackBtn.Visibility(canSkipBackward ? Visibility::Visible : Visibility::Collapsed);
     if (skipFwdBtn)
         skipFwdBtn.Visibility(canSkipForward  ? Visibility::Visible : Visibility::Collapsed);
-    if (nextBtn)
-        nextBtn.Visibility(canSkipForward ? Visibility::Collapsed : Visibility::Visible);
 
     // Album art: clear on no-media, else kick off async load
     if (artEl) {
