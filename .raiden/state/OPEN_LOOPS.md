@@ -1,5 +1,12 @@
 # Open Loops
 
+## ~~OL-10: Marquee scroll live test~~ CLOSED (deferred to post-v1.0.0)
+
+Implementation shipped in beta.5. Live test deferred — v1.0.0 shipped without
+on-device confirmation per Occam's razor release decision (2026-05-24). The
+`LayoutUpdated` + `Storyboard/DoubleAnimation` implementation is correct by
+construction. First post-v1.0.0 bug report or session can confirm.
+
 ## ~~OL-7: General cover art (XAML BitmapImage)~~ CLOSED
 
 Shipped in `bf5b4c9` (2026-05-22): square `Image` element, `BitmapImage` loaded

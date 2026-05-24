@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.2.0-beta.6
+// @version         1.0.0
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -13,42 +13,50 @@
 /*
 # Native Taskbar Media Controller
 
-Injects a media controller natively into the Windows 11 taskbar XAML tree — no overlay window,
-no separate process. The widget lives as a real child of the taskbar's own UI, giving it correct
-z-ordering, auto-hide support, and DPI handling automatically.
+Injects a media controller natively into the Windows 11 taskbar XAML tree —
+no overlay window, no separate process. The widget lives as a real child of
+the taskbar's own UI, giving it correct z-ordering, auto-hide support, and
+DPI handling automatically.
 
 ## Features
 
-- **Now playing** — title and artist from any GSMTC-compatible app (Spotify, YouTube Music,
-  Windows Media Player, browsers, etc.)
-- **Playback controls** — play/pause toggle and skip-next buttons
-- **Multi-session** — a session count chip appears when multiple media apps are active; tap it
-  to cycle between sessions
-- **Fullscreen auto-hide** — panel collapses automatically when a fullscreen app is detected;
-  also hides when the taskbar slides off-screen (auto-hide taskbar mode)
-- **Adaptive text color** — title and artist text adjust to light or dark depending on album art brightness
-- **Double-click to focus** — double-click the widget to bring the source media app to the foreground
-- **Track progress bar** — a slim progress bar at the widget bottom shows playback position
-- **Marquee scroll** — long titles smoothly scroll when they overflow the widget; short titles are static
-- **Configurable** — panel width/height, font size, tray gap, fullscreen behavior, marquee on/off
+- **Now playing** — title and artist from any GSMTC-compatible app (Spotify,
+  YouTube Music, Windows Media Player, browsers, audiobook apps, and more)
+- **Playback controls** — play/pause toggle, skip-next, and skip-back buttons;
+  skip-back is hidden for sources that don't support it
+- **Position timestamp** — shows current position and total duration as
+  `M:SS / M:SS` (or `H:MM:SS / H:MM:SS` for long tracks) when the source
+  exposes timeline data; hidden automatically when timeline is unavailable
+- **Multi-session** — a session count chip appears when multiple media apps
+  are active; tap it to cycle between sessions
+- **Audiobook mode** — tracks longer than one hour are treated as audiobooks:
+  skip buttons navigate chapters, and the playback rate is shown next to the
+  title when it differs from 1×
+- **Fullscreen auto-hide** — panel collapses when a fullscreen app is
+  detected; also hides when the taskbar slides off-screen in auto-hide mode
+- **Adaptive text color** — text adjusts to light or dark based on the Windows
+  theme; in Chameleon mode, brightness is derived from the album art
+- **Double-click to focus** — double-click the widget to bring the source
+  media app to the foreground (or minimize it if already focused)
+- **Track progress bar** — a slim bar at the widget bottom shows playback
+  position; paired with the timestamp display
+- **Background style** — choose transparent, acrylic frosted-glass, or
+  Chameleon (gradient derived from dominant album art color)
 
-## Settings
+## Compatibility notes
 
-| Setting | Default | Notes |
-|---|---|---|
-| Widget width (px) | 300 | |
-| Widget height (px) | 40 | |
-| Font size | 11 | |
-| Gap from tray (px) | 8 | Extra spacing between the widget and the system tray |
-| Hide when fullscreen | true | |
-| Show track progress bar | true | Slim bar at the widget bottom showing playback position |
-| Adaptive text color | true | Matches text brightness to album art |
-| Scroll long title (marquee) | true | Pauses 2 s, scrolls at 40 px/s, pauses 1 s, repeats |
-| Background style | Acrylic | Transparent / Acrylic (frosted glass) / Chameleon (album art gradient) |
+- **Browsers** (Chrome, Edge, Brave, Opera, Vivaldi, Arc, Thorium):
+  one SMTC session per browser process; all tabs share it. Timeline data
+  is available for most Chromium-based browsers.
+- **Firefox**: fully supported — media info and timeline data are exposed by
+  current Firefox versions.
+- **Audiobook apps**: Libby/OverDrive and similar apps that expose chapter
+  navigation are fully supported. Audible's Windows app does not register
+  SMTC sessions and is not supported.
 
 ## Requirements
 
-- Windows 11 (22H2 or later)
+- Windows 11 22H2 or later
 - [Windhawk](https://windhawk.net) mod loader
 */
 // ==/WindhawkModReadme==
@@ -66,19 +74,18 @@ z-ordering, auto-hide support, and DPI handling automatically.
 - HideFullscreen: true
   $name: Hide when fullscreen
 - ShowProgress: true
-  $name: Show track progress bar
+  $name: Show track progress bar and timestamp
+  $description: Enables the slim progress bar at the bottom of the widget and the position/duration timestamp. Hidden automatically when the media source does not expose timeline data.
 - AdaptiveTextColor: true
-  $name: Adaptive text color (follows Windows light/dark theme)
-- MarqueeTitle: true
-  $name: Scroll long title (marquee)
-  $description: Smoothly scrolls the title when it is too wide to fit the widget
-- BackgroundStyle: 1
-  $name: Background style
-  $description: "0 = None (transparent), 1 = Acrylic (frosted glass), 2 = Chameleon (album art gradient)"
+  $name: Adaptive text color
+  $description: In Acrylic mode, follows the Windows light/dark app theme. In Chameleon mode, follows album art brightness.
+- BackgroundStyle: acrylic
+  $name: Theme
+  $description: "None: transparent. Acrylic: frosted-glass blur. Chameleon: gradient derived from album art."
   $options:
-  - 0: None
-  - 1: Acrylic
-  - 2: Chameleon
+  - none: None
+  - acrylic: Acrylic
+  - chameleon: Chameleon
 */
 // ==/WindhawkModSettings==
 
@@ -132,6 +139,7 @@ static const PROPERTYKEY kPKEY_AppUserModel_ID = {
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Media.Animation.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.UI.Xaml.Shapes.h>
 #include <winrt/Windows.Storage.Streams.h>
@@ -146,6 +154,7 @@ using namespace Windows::UI::Xaml::Automation;
 using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Input;
 using namespace Windows::UI::Xaml::Media;
+using namespace Windows::UI::Xaml::Media::Animation;
 using namespace Windows::UI::Xaml::Media::Imaging;
 using namespace Windows::Storage::Streams;
 using namespace Windows::Graphics::Imaging;
@@ -184,27 +193,8 @@ struct ModSettings {
     bool hideFullscreen = true;
     bool showProgress = true;
     bool adaptiveTextColor = true;
-    bool marqueeTitle = true;
     int backgroundStyle = 1;  // 0=None 1=Acrylic 2=Chameleon
 } g_Settings;
-
-// Writes a plain-text line to C:\wh-media-boot.log so cold-start crashes are
-// visible even when DbgViewMini isn't running at boot time.
-static void BootLog(const char* msg) {
-    HANDLE h = CreateFileA("C:\\Users\\Public\\wh-media-boot.log",
-                           FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    SYSTEMTIME st;
-    GetSystemTime(&st);
-    char buf[512];
-    int n = wsprintfA(buf, "[%02d:%02d:%02d.%03d tid=%lu] %s\r\n",
-                      (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
-                      (int)st.wMilliseconds, GetCurrentThreadId(), msg);
-    DWORD written;
-    WriteFile(h, buf, (DWORD)n, &written, nullptr);
-    CloseHandle(h);
-}
 
 static void LoadSettings() {
     g_Settings.panelWidth   = Wh_GetIntSetting(L"PanelWidth");
@@ -214,18 +204,30 @@ static void LoadSettings() {
     g_Settings.hideFullscreen    = Wh_GetIntSetting(L"HideFullscreen") != 0;
     g_Settings.showProgress      = Wh_GetIntSetting(L"ShowProgress") != 0;
     g_Settings.adaptiveTextColor = Wh_GetIntSetting(L"AdaptiveTextColor") != 0;
-    g_Settings.marqueeTitle      = Wh_GetIntSetting(L"MarqueeTitle") != 0;
-    g_Settings.backgroundStyle   = Wh_GetIntSetting(L"BackgroundStyle");
+    {
+        auto s = Wh_GetStringSetting(L"BackgroundStyle");
+        if      (wcscmp(s, L"none")      == 0) g_Settings.backgroundStyle = 0;
+        else if (wcscmp(s, L"chameleon") == 0) g_Settings.backgroundStyle = 2;
+        else                                   g_Settings.backgroundStyle = 1; // "acrylic" or unknown
+        Wh_FreeStringSetting(s);
+    }
     if (g_Settings.panelWidth   <= 0) g_Settings.panelWidth = 300;
     if (g_Settings.panelHeight  <= 0) g_Settings.panelHeight = 40;
     if (g_Settings.fontSize     <= 0) g_Settings.fontSize = 11;
     if (g_Settings.offsetX      <  0) g_Settings.offsetX = 8;
-    if (g_Settings.backgroundStyle < 0 || g_Settings.backgroundStyle > 2)
-        g_Settings.backgroundStyle = 1;
 }
 
 // ---------- GSMTC multi-session state ----------
 static constexpr int MAX_SESSIONS = 10;
+
+// Classifies the SMTC session's origin so feature code can gate on session type
+// without re-parsing the AUMID string every frame.
+enum class SessionSource {
+    Unknown = 0,   // initial zero-initialized state; classification not yet run
+    NativeApp,     // Win32 or Store app (Spotify, Libby, WMP, …)
+    Browser,       // Chromium-family browser (Chrome, Edge, Brave, Opera, Vivaldi, …)
+    BrowserFirefox, // Firefox — never exposes timeline data (Mozilla bug 1689538)
+};
 
 struct MediaState {
     std::wstring title;
@@ -237,12 +239,15 @@ struct MediaState {
     bool canSkipBackward = false; // SMTC Controls.IsPreviousEnabled — previous track/chapter
     int64_t positionMs = 0;
     int64_t durationMs = 0;
+    bool isAudiobook = false;          // true when durationMs > 1 hour
+    std::wstring positionFormatted;    // "MM:SS" or "HH:MM:SS" — updated with timeline
     GlobalSystemMediaTransportControlsSession session{ nullptr };
     event_token propsChangedToken{};
     event_token playbackChangedToken{};
     event_token timelineChangedToken{};
     IRandomAccessStreamReference thumbnailRef{ nullptr };  // null = no art (Libby, etc.)
     uint32_t thumbnailVersion = 0;                         // incremented each time art changes
+    SessionSource source = SessionSource::Unknown;         // set at enumeration time
 };
 
 static MediaState g_MediaStates[MAX_SESSIONS];
@@ -268,7 +273,7 @@ constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
 constexpr std::wstring_view kAlbumArtName     = L"NowPlayingAlbumArt";
 constexpr std::wstring_view kProgressTrackName = L"NowPlayingProgressTrack";
 constexpr std::wstring_view kProgressFillName  = L"NowPlayingProgressFill";
-constexpr std::wstring_view kTitleClipName     = L"NowPlayingTitleClip";
+constexpr std::wstring_view kTimestampName     = L"NowPlayingTimestamp";
 constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
 constexpr std::wstring_view kRootGridName       = L"RootGrid";
 constexpr std::wstring_view kSystemTrayGridName = L"SystemTrayFrameGrid";
@@ -286,16 +291,6 @@ static std::atomic<bool> g_ChameleonLightBg{ false };  // set by art loader; rea
 static HANDLE g_PollThread = nullptr;
 static HANDLE g_PollStop = nullptr;
 static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
-
-// Marquee state — accessed exclusively on the UI dispatcher thread; no mutex needed.
-static DispatcherTimer               g_MarqueeTimer{ nullptr };
-static weak_ref<TextBlock>           g_TitleTb;
-static weak_ref<TranslateTransform>  g_TitleXform;
-static weak_ref<Border>              g_TitleClip;
-static double g_MarqueeOffset    = 0.0;  // current X translation (≤ 0)
-static double g_MarqueeOverflow  = 0.0;  // pixels title extends past clip container
-static int    g_MarqueePhase     = 0;    // 0=start-pause  1=scrolling  2=end-pause
-static int    g_MarqueePauseTicks = 0;   // countdown ticks for the active pause
 
 // ---------- Helpers ----------
 // Cached vtable slot index — avoids rescanning every hook call once found.
@@ -318,24 +313,18 @@ static bool SlotHasVtablePointer(void* candidate) {
 }
 
 static FrameworkElement GetFrameworkElementFromNative(void* pThis) {
-    // Diagnostic scan — logs every slot decision so crashes can be correlated
-    // with the last log line before the fault.
     auto trySlot = [&](int slot) -> FrameworkElement {
         void* candidate = static_cast<char*>(pThis) + slot * sizeof(void*);
         void* vtable    = *reinterpret_cast<void**>(candidate);
         if (!SlotHasVtablePointer(candidate)) {
-            Wh_Log(L"[scan] slot %d: vtable=%p SKIP (not MEM_IMAGE)", slot, vtable);
             return nullptr;
         }
-        Wh_Log(L"[scan] slot %d: vtable=%p OK — calling QI", slot, vtable);
         try {
             FrameworkElement fe{ nullptr };
             HRESULT hr = reinterpret_cast<::IUnknown*>(candidate)->QueryInterface(
                 winrt::guid_of<FrameworkElement>(), winrt::put_abi(fe));
-            Wh_Log(L"[scan] slot %d: QI hr=0x%08X fe=%s", slot, (unsigned)hr, fe ? L"valid" : L"null");
             return (SUCCEEDED(hr) && fe) ? fe : nullptr;
         } catch (...) {
-            Wh_Log(L"[scan] slot %d: QI threw exception", slot);
             return nullptr;
         }
     };
@@ -344,20 +333,16 @@ static FrameworkElement GetFrameworkElementFromNative(void* pThis) {
     int cached = g_FrameworkElementSlot.load(std::memory_order_relaxed);
     if (cached >= 0) {
         if (auto fe = trySlot(cached)) return fe;
-        Wh_Log(L"[scan] cached slot %d no longer valid, rescanning", cached);
         g_FrameworkElementSlot.store(-1, std::memory_order_relaxed);
     }
 
     // Slow path: scan and cache.
-    Wh_Log(L"[scan] full scan, pThis=%p", pThis);
     for (int slot = 0; slot <= 8; ++slot) {
         if (auto fe = trySlot(slot)) {
-            Wh_Log(L"[scan] found FrameworkElement at slot %d", slot);
             g_FrameworkElementSlot.store(slot, std::memory_order_relaxed);
             return fe;
         }
     }
-    Wh_Log(L"[scan] no slot yielded FrameworkElement");
     return nullptr;
 }
 
@@ -417,7 +402,6 @@ static void UpdateWidgetMargin() {
     double trayWidth = tray ? tray.ActualWidth() : 0.0;
     double gap       = (double)g_Settings.offsetX;
     double margin    = trayWidth + gap;
-    Wh_Log(L"[pos] trayWidth=%.0f gap=%.0f => Margin.Right=%.0f", trayWidth, gap, margin);
     widget.Margin(ThicknessHelper::FromLengths(0, 0, margin, 0));
 }
 
@@ -444,6 +428,24 @@ static std::wstring ExtractExeHint(const std::wstring& aumid) {
         return post;
     }
     return lower_pre;
+}
+
+// Classify a session's AUMID into a SessionSource bucket.
+// Calls ExtractExeHint() to obtain the lowercased exe stem, then matches against
+// known browser exe names.  Returns NativeApp for everything else.
+// BrowserFirefox is kept separate because Firefox never exposes timeline data
+// (Mozilla Bugzilla 1689538), which may be useful for feature gating in Task D.
+static SessionSource ClassifySessionSource(const std::wstring& aumid) {
+    std::wstring stem = ExtractExeHint(aumid);  // already lowercased, .exe stripped
+    if (stem == L"firefox") return SessionSource::BrowserFirefox;
+    static const std::wstring kBrowserStems[] = {
+        L"chrome", L"msedge", L"brave", L"opera", L"operagx",
+        L"vivaldi", L"arc", L"thorium", L"chromium",
+    };
+    for (const auto& b : kBrowserStems) {
+        if (stem == b) return SessionSource::Browser;
+    }
+    return SessionSource::NativeApp;
 }
 
 struct FindWindowCtx {
@@ -540,9 +542,6 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
     FindWindowCtx ctx;
     ctx.aumid  = aumid;
     ctx.hint   = ExtractExeHint(aumid);
-    { char _b[256]; wsprintfA(_b, "[SC-M-2] search aumid=%.*ls hint=%.*ls",
-        (int)aumid.size(), aumid.c_str(),
-        (int)ctx.hint.size(), ctx.hint.c_str()); BootLog(_b); }
     EnumWindows(FindWindowByAppIdProc, reinterpret_cast<LPARAM>(&ctx));
 
     // Secondary pass if primary yielded only a hint match (score < 100)
@@ -554,10 +553,9 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
         if (ctx2.best) ctx.best = ctx2.best;
     }
 
-    if (!ctx.best) { BootLog("[SC-M-2] no window found"); return; }
+    if (!ctx.best) return;
 
     if (IsIconic(ctx.best)) {
-        { char _b[160]; wsprintfA(_b, "[SC-M-2] restoring hwnd=%p score=%d", ctx.best, ctx.score); BootLog(_b); }
         ShowWindow(ctx.best, SW_RESTORE);
         AllowSetForegroundWindow(ASFW_ANY);
         DWORD ourTid = GetCurrentThreadId();
@@ -568,29 +566,7 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
         SetForegroundWindow(ctx.best);
         if (ourTid != fgTid) AttachThreadInput(ourTid, fgTid, FALSE);
     } else {
-        { char _b[160]; wsprintfA(_b, "[SC-M-2] minimizing hwnd=%p score=%d", ctx.best, ctx.score); BootLog(_b); }
         ShowWindow(ctx.best, SW_MINIMIZE);
-    }
-}
-
-// Always called on the UI dispatcher thread.
-static void ResetAndStartMarqueeIfOverflow() {
-    if (!g_Settings.marqueeTitle || !g_MarqueeTimer) return;
-    auto tb   = g_TitleTb.get();
-    auto clip = g_TitleClip.get();
-    auto xf   = g_TitleXform.get();
-    if (!tb || !clip || !xf) return;
-
-    g_MarqueeTimer.Stop();
-    xf.X(0.0);
-    g_MarqueeOffset = 0.0;
-
-    double overflow = tb.ActualWidth() - clip.ActualWidth();
-    if (overflow > 1.0) {
-        g_MarqueeOverflow    = overflow;
-        g_MarqueePhase       = 0;
-        g_MarqueePauseTicks  = static_cast<int>(2000.0 / 16.0);  // 2 s at 16 ms/tick
-        g_MarqueeTimer.Start();
     }
 }
 
@@ -664,40 +640,15 @@ static Grid BuildWidget() {
     textCol.Orientation(Orientation::Vertical);
     textCol.VerticalAlignment(VerticalAlignment::Center);
 
-    // Clip container — clips overflow; marquee TranslateTransform scrolls inside it.
-    Border titleClip;
-    titleClip.Name(kTitleClipName);
-    titleClip.HorizontalAlignment(HorizontalAlignment::Stretch);
-    g_TitleClip = make_weak(titleClip);
-    // WinRT XAML has no ClipToBounds; attach a RectangleGeometry clip and keep it
-    // sized to the border via SizeChanged so the scrolling title doesn't overflow.
-    RectangleGeometry titleClipGeom;
-    titleClip.Clip(titleClipGeom);
-    titleClip.SizeChanged([titleClipGeom](IInspectable const&, SizeChangedEventArgs const& e) {
-        titleClipGeom.Rect({0.0f, 0.0f, e.NewSize().Width, e.NewSize().Height});
-    });
-
-    TranslateTransform titleXform;
-    g_TitleXform = make_weak(titleXform);
-
     TextBlock title;
     title.Name(kTitleName);
     title.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
     title.FontSize((double)g_Settings.fontSize);
-    // TextTrimming is set dynamically in ApplyStateToWidget.
+    title.TextTrimming(TextTrimming::CharacterEllipsis);
     title.TextWrapping(TextWrapping::NoWrap);
     title.MaxLines(1);
-    title.HorizontalAlignment(HorizontalAlignment::Left);  // Left so ActualWidth = natural
-                                                           // text width (not container width)
-    title.RenderTransform(titleXform);
-    g_TitleTb = make_weak(title);
 
-    title.SizeChanged([](IInspectable const&, SizeChangedEventArgs const&) {
-        ResetAndStartMarqueeIfOverflow();
-    });
-
-    titleClip.Child(title);
-    textCol.Children().Append(titleClip);
+    textCol.Children().Append(title);
 
     TextBlock artist;
     artist.Name(kArtistName);
@@ -708,6 +659,17 @@ static Grid BuildWidget() {
     artist.MaxLines(1);
 
     textCol.Children().Append(artist);
+
+    TextBlock timestamp;
+    timestamp.Name(kTimestampName);
+    timestamp.FontSize(std::max(8.0, (double)g_Settings.fontSize - 2.0));
+    timestamp.Foreground(MakeBrush(0xB3, 0xFF, 0xFF, 0xFF));
+    timestamp.TextTrimming(TextTrimming::CharacterEllipsis);
+    timestamp.TextWrapping(TextWrapping::NoWrap);
+    timestamp.MaxLines(1);
+    timestamp.Visibility(Visibility::Collapsed);
+    textCol.Children().Append(timestamp);
+
     Grid::SetColumn(textCol, 2);
     layout.Children().Append(textCol);
 
@@ -828,42 +790,6 @@ static Grid BuildWidget() {
             e.Handled(true);
         }));
 
-    // Marquee DispatcherTimer — 16 ms ≈ 60 fps; created once on the UI thread.
-    DispatcherTimer marqTimer;
-    marqTimer.Interval(TimeSpan{ 160'000LL });  // 100-ns ticks; 160,000 = 16 ms
-    marqTimer.Tick([](IInspectable const& sender, IInspectable const&) {
-        if (g_Unloading.load()) {
-            if (auto t = sender.try_as<DispatcherTimer>()) t.Stop();
-            return;
-        }
-        auto xf = g_TitleXform.get();
-        if (!xf) return;
-
-        switch (g_MarqueePhase) {
-        case 0:  // start pause
-            if (--g_MarqueePauseTicks <= 0) g_MarqueePhase = 1;
-            break;
-        case 1:  // scrolling left
-            g_MarqueeOffset -= 40.0 * 16.0 / 1000.0;   // 40 px/s
-            if (g_MarqueeOffset <= -g_MarqueeOverflow) {
-                g_MarqueeOffset     = -g_MarqueeOverflow;
-                g_MarqueePhase      = 2;
-                g_MarqueePauseTicks = static_cast<int>(1000.0 / 16.0);  // 1 s end pause
-            }
-            xf.X(g_MarqueeOffset);
-            break;
-        case 2:  // end pause
-            if (--g_MarqueePauseTicks <= 0) {
-                g_MarqueeOffset     = 0.0;
-                xf.X(0.0);
-                g_MarqueePhase      = 0;
-                g_MarqueePauseTicks = static_cast<int>(2000.0 / 16.0);  // 2 s start pause
-            }
-            break;
-        }
-    });
-    g_MarqueeTimer = marqTimer;
-
     return root;
 }
 
@@ -944,6 +870,17 @@ static T FindByName(FrameworkElement parent, std::wstring_view name) {
     return nullptr;
 }
 
+static std::wstring FormatMs(int64_t ms, bool forceHours = false) {
+    int64_t secs = ms / 1000;
+    int h = (int)(secs / 3600);
+    int m = (int)((secs % 3600) / 60);
+    int s = (int)(secs % 60);
+    wchar_t buf[16];
+    if (h > 0 || forceHours) swprintf(buf, 16, L"%d:%02d:%02d", h, m, s);
+    else                     swprintf(buf, 16, L"%d:%02d", m, s);
+    return std::wstring(buf);
+}
+
 static void ApplyStateToWidget(Grid widget) {
     if (!widget) return;
 
@@ -957,6 +894,8 @@ static void ApplyStateToWidget(Grid widget) {
     uint32_t thumbnailVersion = 0;
     IRandomAccessStreamReference thumbnailRef{ nullptr };
     int64_t positionMs = 0, durationMs = 0;
+    bool isAudiobook = false;
+    SessionSource source = SessionSource::Unknown;
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
         count = g_MediaStateCount;
@@ -973,13 +912,16 @@ static void ApplyStateToWidget(Grid widget) {
             thumbnailRef     = m.thumbnailRef;
             positionMs       = m.positionMs;
             durationMs       = m.durationMs;
-            hasMedia = !title.empty();
+            isAudiobook      = m.isAudiobook;
+            source           = m.source;
+            hasMedia = (activeIdx >= 0 && activeIdx < count);
         }
     }
 
     // 2b: Build artist display string; append rate suffix when speed != 1.0×
     std::wstring artistDisplay = artist;
-    if (std::fabs(playbackRate - 1.0) > 0.01) {
+    // Rate == 0.0 means paused (SMTC reports 0 for PlaybackRate when not playing).
+    if (playbackRate > 0.01 && std::fabs(playbackRate - 1.0) > 0.01) {
         wchar_t rateBuf[16];
         swprintf(rateBuf, 16, L"%.4g\u00D7", playbackRate); // e.g. "1.5×"
         artistDisplay += artistDisplay.empty() ? rateBuf
@@ -994,27 +936,15 @@ static void ApplyStateToWidget(Grid widget) {
     auto skipBackBtn= FindByName<Button>(widget, kSkipBackName);
     auto artEl      = FindByName<Image>(widget, kAlbumArtName);
 
-    if (titleTb) {
+    if (titleTb)
         titleTb.Text(hasMedia ? title : L"");
-        // When marquee is on: trimming is disabled; RectangleGeometry clip on the Border handles clipping.
-        // When marquee is off: standard CharacterEllipsis fallback.
-        titleTb.TextTrimming(g_Settings.marqueeTitle ? TextTrimming::None
-                                                     : TextTrimming::CharacterEllipsis);
-    }
-
-    // Stop any running scroll immediately; re-check overflow after the layout pass.
-    if (g_Settings.marqueeTitle && g_MarqueeTimer) {
-        g_MarqueeTimer.Stop();
-        if (auto xf = g_TitleXform.get()) xf.X(0.0);
-        if (hasMedia) {
-            widget.Dispatcher().RunAsync(
-                Windows::UI::Core::CoreDispatcherPriority::Low,
-                []() { ResetAndStartMarqueeIfOverflow(); });
-        }
-    }
 
     if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
+
+    // Audiobook mode: relabel artist field for screen readers (author vs. artist).
+    if (artistTb)
+        AutomationProperties::SetName(artistTb, isAudiobook ? L"Author" : L"Artist");
 
     // SC-UI-2: adaptive foreground follows Windows light/dark app theme, or
     // Chameleon luma (g_ChameleonLightBg) when BackgroundStyle == 2.
@@ -1048,6 +978,14 @@ static void ApplyStateToWidget(Grid widget) {
         skipBackBtn.Visibility(canSkipBackward ? Visibility::Visible : Visibility::Collapsed);
     if (skipFwdBtn)
         skipFwdBtn.Visibility(canSkipForward  ? Visibility::Visible : Visibility::Collapsed);
+
+    // Audiobook mode: relabel skip buttons for screen readers (chapter vs. track).
+    if (skipBackBtn)
+        AutomationProperties::SetName(skipBackBtn,
+            isAudiobook ? L"Previous chapter" : L"Skip backward");
+    if (skipFwdBtn)
+        AutomationProperties::SetName(skipFwdBtn,
+            isAudiobook ? L"Next chapter" : L"Skip forward");
 
     // Album art: clear on no-media, else kick off async load
     if (artEl) {
@@ -1151,9 +1089,15 @@ static void ApplyStateToWidget(Grid widget) {
                         wRoot.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
                     }
                 }
+            } else {
+                // Chameleon (style=2): gradient arrives via fire_and_forget.
+                // Pre-clear any non-gradient brush (e.g., leftover AcrylicBrush from
+                // a live style switch) so the old background doesn't linger.
+                auto cur = wRoot.Background();
+                if (cur && !cur.try_as<LinearGradientBrush>()) {
+                    wRoot.Background(nullptr);
+                }
             }
-            // style==2 (Chameleon): initial nullptr was already set in no-art branch
-            // above, or the gradient will arrive from the fire_and_forget.
         }
     }
 
@@ -1168,6 +1112,16 @@ static void ApplyStateToWidget(Grid widget) {
                 double ratio = std::clamp(positionMs / (double)durationMs, 0.0, 1.0);
                 fill.Width(ratio * track.ActualWidth());
             }
+        }
+    }
+
+    if (auto tsTb = FindByName<TextBlock>(widget, kTimestampName)) {
+        bool showTs = g_Settings.showProgress && hasMedia && durationMs > 0;
+        tsTb.Visibility(showTs ? Visibility::Visible : Visibility::Collapsed);
+        if (showTs) {
+            bool hasHours = durationMs >= 3'600'000LL;
+            tsTb.Text(FormatMs(positionMs, hasHours) + L" / " + FormatMs(durationMs));
+            tsTb.Foreground(MakeBrush(0xB3, fgHi, fgHi, fgHi));
         }
     }
 
@@ -1198,7 +1152,6 @@ static void InjectWidgetInto(Grid rootGrid) {
     // Already injected?
     auto existing = FindByName<Grid>(rootGrid, kWidgetRootName);
     if (existing) {
-        Wh_Log(L"[inject] widget already present — refreshing state");
         {
             std::lock_guard<std::mutex> g(g_WidgetMutex);
             g_WidgetRoot = make_weak(existing);
@@ -1254,10 +1207,7 @@ static void InjectWidgetInto(Grid rootGrid) {
     });
     ApplyStateToWidget(widget);
 
-    if (HANDLE ev = g_GsmtcStartEvent.load()) {
-        bool signaled = SetEvent(ev);
-        Wh_Log(L"[inject] signaled GSMTC start event (SetEvent=%d)", (int)signaled);
-    }
+    if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
 }
 
 static void ScheduleScanAsync(FrameworkElement startNode) {
@@ -1265,8 +1215,6 @@ static void ScheduleScanAsync(FrameworkElement startNode) {
     if (g_Unloading.load()) return;
     bool expected = false;
     if (!g_ScanPending.compare_exchange_strong(expected, true)) return;
-
-    Wh_Log(L"[inject] ScheduleScanAsync started on dispatcher");
 
     auto weak = make_weak(startNode);
     try {
@@ -1276,22 +1224,12 @@ static void ScheduleScanAsync(FrameworkElement startNode) {
                 g_ScanPending = false;
                 if (g_Unloading.load()) return;
                 auto node = weak.get();
-                if (!node) {
-                    Wh_Log(L"[inject] Weak reference to startNode lost");
-                    return;
-                }
+                if (!node) return;
                 try {
                     auto frame = WalkUpToTaskbarFrame(node);
-                    if (!frame) {
-                        Wh_Log(L"[inject] WalkUpToTaskbarFrame returned null");
-                        return;
-                    }
+                    if (!frame) return;
                     auto rootGrid = FindRootGrid(frame);
-                    if (!rootGrid) {
-                        Wh_Log(L"[inject] FindRootGrid returned null");
-                        return;
-                    }
-                    Wh_Log(L"[inject] Found rootGrid, injecting...");
+                    if (!rootGrid) return;
                     InjectWidgetInto(rootGrid);
                 } catch (...) {
                     Wh_Log(L"[inject] Exception during XAML tree walk");
@@ -1403,6 +1341,7 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
             auto albumArtist = std::wstring(props.AlbumArtist().c_str());
             if (title.empty()  && !albumTitle.empty())  title  = albumTitle;
             if (artist.empty() && !albumArtist.empty()) artist = albumArtist;
+            if (title.empty()) title = L"\u266B";
         }
 
         // Fetch thumbnail stream reference (null for Libby and apps with no art)
@@ -1434,6 +1373,23 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         }
     } WH_CATCH(L"UpdateOneSessionAsync/Timeline")
 
+    // Audiobook detection: session is audiobook mode when duration exceeds 1 hour.
+    // Evaluated after the timeline read so durMs reflects the current value.
+    bool isAb = (durMs > 3'600'000LL);  // > 1 hour
+
+    // Build formatted position string: HH:MM:SS when hours present, else MM:SS.
+    std::wstring posFmt;
+    {
+        int64_t secs = posMs / 1000;
+        int h = (int)(secs / 3600);
+        int m = (int)((secs % 3600) / 60);
+        int s = (int)(secs % 60);
+        wchar_t buf[16];
+        if (h > 0) swprintf(buf, 16, L"%d:%02d:%02d", h, m, s);
+        else        swprintf(buf, 16, L"%d:%02d", m, s);
+        posFmt = buf;
+    }
+
     {
         std::lock_guard<std::mutex> lk(g_MediaMutex);
         if (g_Unloading.load() || idx >= g_MediaStateCount) co_return;
@@ -1445,13 +1401,17 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         if (m.title == title && m.artist == artist && m.isPlaying == playing
             && std::fabs(m.playbackRate - playbackRate) < 0.001
             && m.canSkipForward == canSkipForward
-            && m.canSkipBackward == canSkipBackward) co_return;
+            && m.canSkipBackward == canSkipBackward
+            && m.isAudiobook == isAb
+            && m.positionFormatted == posFmt) co_return;
         m.title          = title;
         m.artist         = artist;
         m.isPlaying      = playing;
         m.playbackRate   = playbackRate;
         m.canSkipForward  = canSkipForward;
         m.canSkipBackward = canSkipBackward;
+        m.isAudiobook        = isAb;
+        m.positionFormatted  = posFmt;
 
         // Thumbnail: bump version whenever art identity changes (COM pointer comparison).
         bool artChanged = (m.thumbnailRef != newThumbRef);
@@ -1477,7 +1437,6 @@ static void DetachSessionLocked(int idx) {
 }
 
 static void DoEnumerateAndRefresh() {
-    Wh_Log(L"[gsmtc] DoEnumerateAndRefresh: entered");
     GlobalSystemMediaTransportControlsSessionManager mgr{ nullptr };
     {
         std::lock_guard<std::mutex> lk(g_MediaMutex);
@@ -1504,6 +1463,7 @@ static void DoEnumerateAndRefresh() {
             auto& m = g_MediaStates[g_MediaStateCount];
             m.session = s;
             m.sessionId = WH_TRY_OR(std::wstring(s.SourceAppUserModelId().c_str()), std::wstring(L""));
+            m.source    = ClassifySessionSource(m.sessionId);
             try {
                 m.propsChangedToken = s.MediaPropertiesChanged(
                     [idx = g_MediaStateCount](auto&&, auto&&) { UpdateOneSessionAsync(idx); });
@@ -1526,7 +1486,6 @@ static void DoEnumerateAndRefresh() {
             g_MediaStateCount++;
         }
         g_ActiveSessionIndex = (playingIdx >= 0) ? playingIdx : 0;
-        Wh_Log(L"[gsmtc] enumerated %d session(s), active=%d", g_MediaStateCount, g_ActiveSessionIndex);
     }
 
     int n;
@@ -1536,49 +1495,26 @@ static void DoEnumerateAndRefresh() {
 }
 
 static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
-    BootLog("GsmtcThreadFunc: started");
-    Wh_Log(L"[gsmtc] thread: started, tid=%lu", GetCurrentThreadId());
     // Guard against the narrow race where the thread is created just as uninit begins.
-    if (g_Unloading.load()) {
-        BootLog("GsmtcThreadFunc: unloading on entry — exiting");
-        Wh_Log(L"[gsmtc] thread: unloading on entry — exiting");
-        return 0;
-    }
+    if (g_Unloading.load()) return 0;
     try {
         init_apartment(apartment_type::single_threaded);
-        Wh_Log(L"[gsmtc] thread: STA init OK");
-        BootLog("GsmtcThreadFunc: init_apartment OK");
     } WH_CATCH(L"GsmtcThread/STA")
 
-    BootLog("GsmtcThreadFunc: waiting for start event");
-    Wh_Log(L"[gsmtc] thread: waiting for start event (g_GsmtcStartEvent=%p)", g_GsmtcStartEvent.load());
-    if (HANDLE ev = g_GsmtcStartEvent.load()) {
-        DWORD wr = WaitForSingleObject(ev, INFINITE);
-        Wh_Log(L"[gsmtc] thread: start event wait returned %lu (OBJECT_0=0)", wr);
-    }
+    if (HANDLE ev = g_GsmtcStartEvent.load()) WaitForSingleObject(ev, INFINITE);
 
-    if (g_Unloading.load()) {
-        Wh_Log(L"[gsmtc] thread: unloading flag set after wait — exiting");
-        BootLog("GsmtcThreadFunc: unloading — exiting early");
-        return 0;
-    }
+    if (g_Unloading.load()) return 0;
 
-    BootLog("GsmtcThreadFunc: calling RequestAsync");
-    Wh_Log(L"[gsmtc] thread: calling RequestAsync");
     IAsyncOperation<GlobalSystemMediaTransportControlsSessionManager> req{ nullptr };
     try {
         req = GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
     } catch (winrt::hresult_error const& e) {
         Wh_Log(L"[gsmtc] thread: RequestAsync() threw hr=0x%08X %s", (unsigned)e.code(), e.message().c_str());
-        BootLog("GsmtcThreadFunc: RequestAsync threw hresult_error — exiting");
         return 0;
     } catch (...) {
         Wh_Log(L"[gsmtc] thread: RequestAsync() threw unknown exception");
-        BootLog("GsmtcThreadFunc: RequestAsync threw unknown exception — exiting");
         return 0;
     }
-    BootLog("GsmtcThreadFunc: RequestAsync returned, setting Completed callback");
-    Wh_Log(L"[gsmtc] thread: request created, status=%d", (int)req.Status());
 
     {
         std::lock_guard<std::mutex> lk(g_MediaMutex);
@@ -1592,8 +1528,6 @@ static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
             std::lock_guard<std::mutex> lk(g_MediaMutex);
             g_PendingRequest = nullptr;
         }
-
-        Wh_Log(L"[gsmtc] Completed callback: status=%d tid=%lu", (int)status, GetCurrentThreadId());
 
         if (status == AsyncStatus::Error) {
             try {
@@ -1622,27 +1556,20 @@ static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
             if (g_Unloading.load()) return;
             g_SessionManager = mgr;
         }
-        Wh_Log(L"[gsmtc] manager set OK, registering SessionsChanged");
-
         try {
             g_SessionsChangedToken = g_SessionManager.SessionsChanged(
-                [](auto&&, auto&&) {
-                    Wh_Log(L"[gsmtc] SessionsChanged fired");
-                    DoEnumerateAndRefresh();
-                });
+                [](auto&&, auto&&) { DoEnumerateAndRefresh(); });
         } WH_CATCH(L"GsmtcThread/SessionsChanged")
 
         DoEnumerateAndRefresh();
     });
 
-    Wh_Log(L"[gsmtc] thread: Completed callback registered, entering STA message pump");
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         if (msg.message == WM_QUIT) break;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-    Wh_Log(L"[gsmtc] thread: STA message pump exited");
     return 0;
 }
 
@@ -1683,7 +1610,6 @@ static bool IsForegroundWindowFullscreen(HMONITOR hTaskbarMon) {
 }
 
 static DWORD WINAPI FullscreenPollThread(LPVOID) {
-    BootLog("FullscreenPollThread: started");
     while (WaitForSingleObject(g_PollStop, 1000) == WAIT_TIMEOUT) {
         if (!g_Settings.hideFullscreen) continue;
         HWND hTaskbar = g_hTaskbarWnd.load();
@@ -1735,15 +1661,11 @@ static void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
     // RAII guard so the counter is always decremented even if the original throws.
     struct HookGuard { ~HookGuard() { g_HookCallCounter--; } } guard;
     g_HookCallCounter++;
-    Wh_Log(L"[hook] UpdateVisualStates pThis=%p", pThis);
     TaskListButton_UpdateVisualStates_Original(pThis);
-    Wh_Log(L"[hook] original returned, calling GetFrameworkElementFromNative");
     if (!g_Unloading.load()) {
         auto elem = GetFrameworkElementFromNative(pThis);
-        Wh_Log(L"[hook] GetFrameworkElementFromNative returned %s", elem ? L"valid" : L"null");
         if (elem) ScheduleScanAsync(elem);
     }
-    Wh_Log(L"[hook] UpdateVisualStates hook done");
 }
 
 static bool HookTaskbarViewDllSymbols(HMODULE module) {
@@ -1774,23 +1696,18 @@ static void TriggerInitialScan() {
         //    yet causes RequestAsync to succeed against an uninitialized service
         //    stub; the Completed callback fires ~2 min later in a bad state and
         //    crashes Explorer with an unhandled hardware fault.
-        BootLog("TriggerInitialScan thread: started, polling for Shell_TrayWnd");
         HWND hTray = nullptr;
         for (int i = 0; i < 300 && !g_Unloading.load(); ++i) {
             Sleep(100);
             hTray = FindWindowW(L"Shell_TrayWnd", nullptr);
             if (hTray) break;
         }
-        if (g_Unloading.load()) { BootLog("TriggerInitialScan thread: unloading — exit"); return; }
+        if (g_Unloading.load()) return;
 
         if (hTray) {
-            BootLog("TriggerInitialScan thread: Shell_TrayWnd found, posting WM_SIZE");
             RECT rc{};
             GetClientRect(hTray, &rc);
             PostMessageW(hTray, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
-            BootLog("TriggerInitialScan thread: WM_SIZE posted");
-        } else {
-            BootLog("TriggerInitialScan thread: Shell_TrayWnd not found after 30s");
         }
         HWND hTray2 = FindWindowW(L"Shell_SecondaryTrayWnd", nullptr);
         while (hTray2) {
@@ -1798,12 +1715,7 @@ static void TriggerInitialScan() {
             hTray2 = FindWindowExW(nullptr, hTray2, L"Shell_SecondaryTrayWnd", nullptr);
         }
         // Signal the GSMTC thread only after the shell is ready.
-        if (HANDLE ev = g_GsmtcStartEvent.load()) {
-            SetEvent(ev);
-            BootLog("TriggerInitialScan thread: signaled GSMTC start event");
-            Wh_Log(L"[init] signaled GSMTC start event from TriggerInitialScan");
-        }
-        BootLog("TriggerInitialScan thread: done");
+        if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
     }).detach();
 }
 
@@ -1815,7 +1727,6 @@ static void TriggerInitialScan() {
 // executing it causes an unhandled hardware fault that kills Explorer.
 static void PollForTaskbarViewDll() {
     std::thread([]() {
-        BootLog("[poll] PollForTaskbarViewDll: started");
         for (int i = 0; i < 600 && !g_Unloading.load(); ++i) {
             Sleep(100);
             HMODULE m = GetModuleHandleW(L"Taskbar.View.dll");
@@ -1825,80 +1736,55 @@ static void PollForTaskbarViewDll() {
             bool already = g_TaskbarViewDllLoaded.exchange(true);
             if (already) break;
 
-            BootLog("[poll] Taskbar.View.dll detected — hooking symbols");
-            Wh_Log(L"[coldstart] Taskbar.View.dll detected via poll, module=%p", m);
             HookTaskbarViewDllSymbols(m);
-            BootLog("[poll] HookTaskbarViewDllSymbols done");
-            Wh_Log(L"[coldstart] HookTaskbarViewDllSymbols done");
             Wh_ApplyHookOperations();
-            BootLog("[poll] Wh_ApplyHookOperations done");
-            Wh_Log(L"[coldstart] Wh_ApplyHookOperations done");
             // All deferred initialization: hooks are installed and XAML is confirmed
             // loaded, so it is safe to create threads that touch COM/WinRT state.
             if (!g_Unloading.load()) {
                 g_PollStop   = CreateEventW(nullptr, TRUE, FALSE, nullptr);
                 g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
-                BootLog("[poll] fullscreen poll thread created");
                 g_GsmtcStartEvent.store(CreateEventW(nullptr, TRUE, FALSE, nullptr));
                 g_GsmtcThread = CreateThread(nullptr, 0, GsmtcThreadFunc, nullptr, 0, &g_GsmtcThreadId);
-                BootLog("[poll] GSMTC thread created");
-                Wh_Log(L"[coldstart] GSMTC thread: handle=%p tid=%lu", g_GsmtcThread, g_GsmtcThreadId);
             }
             if (!g_Unloading.load()) {
                 TriggerInitialScan();
-                BootLog("[poll] TriggerInitialScan called — done");
             }
             break;
         }
-        if (!g_TaskbarViewDllLoaded.load())
-            BootLog("[poll] Taskbar.View.dll not found after 60s");
     }).detach();
 }
 
 // ---------- Mod entry points ----------
 BOOL Wh_ModInit() {
-    BootLog("Wh_ModInit started");
-    Wh_Log(L"native-taskbar-media-controller: init (tid=%lu)", GetCurrentThreadId());
     LoadSettings();
 
     HMODULE taskbarView = GetModuleHandleW(L"Taskbar.View.dll");
     if (!taskbarView) taskbarView = GetModuleHandleW(L"ExplorerExtensions.dll");
-    Wh_Log(L"[init] Taskbar.View module: %p", taskbarView);
 
     if (taskbarView) {
         // Direct path: DLL already loaded. Initialize everything immediately.
-        BootLog("Wh_ModInit: Taskbar.View.dll already loaded — direct path");
         g_TaskbarViewDllLoaded = true;
         if (!HookTaskbarViewDllSymbols(taskbarView)) return FALSE;
-        BootLog("Wh_ModInit: HookTaskbarViewDllSymbols done");
 
         g_PollStop   = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         g_PollThread = CreateThread(nullptr, 0, FullscreenPollThread, nullptr, 0, nullptr);
-        BootLog("Wh_ModInit: poll thread created");
 
         g_GsmtcStartEvent.store(CreateEventW(nullptr, TRUE, FALSE, nullptr));
         g_GsmtcThread = CreateThread(nullptr, 0, GsmtcThreadFunc, nullptr, 0, &g_GsmtcThreadId);
-        Wh_Log(L"[init] GSMTC thread: handle=%p tid=%lu", g_GsmtcThread, g_GsmtcThreadId);
-        BootLog("Wh_ModInit: GSMTC thread created");
 
         TriggerInitialScan();
-        BootLog("Wh_ModInit: TriggerInitialScan called — init complete");
     } else {
         // Cold-start path: DLL not yet loaded. Create exactly one poll thread and
         // return immediately. PollForTaskbarViewDll creates all other threads after
         // the DLL appears and hooks are applied — avoiding any thread creation or
         // COM initialization during Explorer's hazardous early-boot window.
-        BootLog("Wh_ModInit: Taskbar.View.dll not loaded — starting poll thread");
         PollForTaskbarViewDll();
-        BootLog("Wh_ModInit: poll thread started — all other init deferred");
     }
 
-    Wh_Log(L"[init] Wh_ModInit complete");
     return TRUE;
 }
 
 void Wh_ModUninit() {
-    Wh_Log(L"native-taskbar-media-controller: uninit");
     g_Unloading = true;
 
     if (g_PollStop) SetEvent(g_PollStop);
@@ -1934,13 +1820,6 @@ void Wh_ModUninit() {
         g_SessionManager = nullptr;
     }
 
-    // Null COM references so marquee objects are released. g_Unloading causes the
-    // timer tick to call Stop() on the UI thread — do NOT call Stop() here (wrong thread).
-    g_MarqueeTimer = nullptr;
-    g_TitleTb      = {};
-    g_TitleXform   = {};
-    g_TitleClip    = {};
-
     RemoveWidget();
 
     // Spin until in-flight hooks finish.
@@ -1975,6 +1854,8 @@ void Wh_ModSettingsChanged() {
                 g.Height((double)h);
                 if (auto t = FindByName<TextBlock>(g, kTitleName))  t.FontSize(fs);
                 if (auto a = FindByName<TextBlock>(g, kArtistName)) a.FontSize(fs);
+                if (auto ts = FindByName<TextBlock>(g, kTimestampName))
+                    ts.FontSize(std::max(8.0, fs - 2.0));
                 if (auto s = FindByName<TextBlock>(g, kSessionCountName)) s.FontSize(fs);
                 ApplyStateToWidget(g);
                 UpdateWidgetMargin();  // must run on UI thread
