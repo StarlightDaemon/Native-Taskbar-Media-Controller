@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.0.1
+// @version         1.1.0
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -86,6 +86,9 @@ DPI handling automatically.
   - none: None
   - acrylic: Acrylic
   - chameleon: Chameleon
+- MarqueeScroll: true
+  $name: Scroll long titles
+  $description: Marquee-scroll title text that is wider than the available space
 */
 // ==/WindhawkModSettings==
 
@@ -194,6 +197,7 @@ struct ModSettings {
     bool showProgress = true;
     bool adaptiveTextColor = true;
     int backgroundStyle = 1;  // 0=None 1=Acrylic 2=Chameleon
+    bool marqueeScroll = true;
 } g_Settings;
 
 static void LoadSettings() {
@@ -204,6 +208,7 @@ static void LoadSettings() {
     g_Settings.hideFullscreen    = Wh_GetIntSetting(L"HideFullscreen") != 0;
     g_Settings.showProgress      = Wh_GetIntSetting(L"ShowProgress") != 0;
     g_Settings.adaptiveTextColor = Wh_GetIntSetting(L"AdaptiveTextColor") != 0;
+    g_Settings.marqueeScroll     = Wh_GetIntSetting(L"MarqueeScroll") != 0;
     {
         auto s = Wh_GetStringSetting(L"BackgroundStyle");
         if      (wcscmp(s, L"none")      == 0) g_Settings.backgroundStyle = 0;
@@ -274,6 +279,9 @@ constexpr std::wstring_view kAlbumArtName     = L"NowPlayingAlbumArt";
 constexpr std::wstring_view kProgressTrackName = L"NowPlayingProgressTrack";
 constexpr std::wstring_view kProgressFillName  = L"NowPlayingProgressFill";
 constexpr std::wstring_view kTimestampName     = L"NowPlayingTimestamp";
+constexpr std::wstring_view kTitleCanvasName    = L"NowPlayingTitleCanvas";
+constexpr std::wstring_view kTitleScrollerName  = L"NowPlayingTitleScroller";
+constexpr std::wstring_view kTitleName2         = L"NowPlayingTitle2";
 constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
 constexpr std::wstring_view kRootGridName       = L"RootGrid";
 constexpr std::wstring_view kSystemTrayGridName = L"SystemTrayFrameGrid";
@@ -288,6 +296,8 @@ static std::atomic<bool> g_TaskbarViewDllLoaded{ false };
 static std::atomic<int> g_HookCallCounter{ 0 };
 static std::atomic<bool> g_Unloading{ false };
 static std::atomic<bool> g_ChameleonLightBg{ false };  // set by art loader; read in ApplyStateToWidget
+static Storyboard           g_MarqueeStoryboard{ nullptr };
+static winrt::event_token   g_TitleSizeChangedToken{};
 static HANDLE g_PollThread = nullptr;
 static HANDLE g_PollStop = nullptr;
 static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
@@ -386,6 +396,7 @@ static SolidColorBrush MakeBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
 // Forward
 static void RefreshWidgetUI();
 static void UpdateWidgetMargin();
+static void StartMarqueeIfNeeded(Canvas titleCanvas, TextBlock titleTb);
 
 // Recompute the widget's right margin from the measured system tray width.
 // Called at inject time and whenever the tray resizes.
@@ -586,9 +597,8 @@ static Grid BuildWidget() {
     Grid root;
     root.Name(kWidgetRootName);
     root.Width((double)g_Settings.panelWidth);
-    root.Height((double)g_Settings.panelHeight);
     root.HorizontalAlignment(HorizontalAlignment::Right);
-    root.VerticalAlignment(VerticalAlignment::Center);
+    root.VerticalAlignment(VerticalAlignment::Stretch);
     // Background is applied dynamically in ApplyStateToWidget() based on BackgroundStyle setting.
     root.CornerRadius(CornerRadiusHelper::FromUniformRadius(8.0));
     Canvas::SetZIndex(root, 2);
@@ -651,15 +661,85 @@ static Grid BuildWidget() {
     textCol.Orientation(Orientation::Vertical);
     textCol.VerticalAlignment(VerticalAlignment::Center);
 
+    // Title clip canvas — clips the scrolling content to the star column width.
+    Canvas titleCanvas;
+    titleCanvas.Name(kTitleCanvasName);
+    titleCanvas.HorizontalAlignment(HorizontalAlignment::Stretch);
+    titleCanvas.VerticalAlignment(VerticalAlignment::Center);
+    titleCanvas.Height((double)g_Settings.fontSize * 1.6);
+
+    RectangleGeometry clipRect;
+    clipRect.Rect(RectHelper::FromCoordinatesAndDimensions(
+        0, 0, 0, (float)(g_Settings.fontSize * 1.6)));
+    titleCanvas.Clip(clipRect);
+
+    // Horizontal scroller — holds two copies of the title side by side.
+    // Animating its TranslateTransform creates a seamless ticker: as copy 1 exits
+    // left, copy 2 enters from the right at the same speed with no blank gap.
+    StackPanel scroller;
+    scroller.Name(kTitleScrollerName);
+    scroller.Orientation(Orientation::Horizontal);
+    scroller.VerticalAlignment(VerticalAlignment::Center);
+    TranslateTransform scrollTranslate;
+    scroller.RenderTransform(scrollTranslate);
+
     TextBlock title;
     title.Name(kTitleName);
     title.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
     title.FontSize((double)g_Settings.fontSize);
-    title.TextTrimming(TextTrimming::CharacterEllipsis);
+    title.TextTrimming(TextTrimming::None);
     title.TextWrapping(TextWrapping::NoWrap);
     title.MaxLines(1);
+    title.VerticalAlignment(VerticalAlignment::Center);
 
-    textCol.Children().Append(title);
+    // Fixed gap between end of copy 1 and start of copy 2
+    Border titleGap;
+    titleGap.Width(48.0);
+
+    TextBlock title2;
+    title2.Name(kTitleName2);
+    title2.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
+    title2.FontSize((double)g_Settings.fontSize);
+    title2.TextTrimming(TextTrimming::None);
+    title2.TextWrapping(TextWrapping::NoWrap);
+    title2.MaxLines(1);
+    title2.VerticalAlignment(VerticalAlignment::Center);
+
+    scroller.Children().Append(title);
+    scroller.Children().Append(titleGap);
+    scroller.Children().Append(title2);
+    titleCanvas.Children().Append(scroller);
+
+    // SizeChanged on the Canvas keeps the clip rect width current and re-evaluates
+    // marquee — this fires after the Canvas gets its real width from the star column,
+    // which may be after the TextBlock's first SizeChanged fires with canvasW==0.
+    auto weakCanvas = make_weak(titleCanvas);
+    auto weakTitle  = make_weak(title);
+    titleCanvas.SizeChanged(SizeChangedEventHandler(
+        [weakCanvas, weakTitle](IInspectable const& sender, SizeChangedEventArgs const& e) {
+            auto canvas = sender.as<Canvas>();
+            if (auto clip = canvas.Clip().try_as<RectangleGeometry>()) {
+                auto r = clip.Rect();
+                clip.Rect(RectHelper::FromCoordinatesAndDimensions(
+                    0, 0, (float)e.NewSize().Width, r.Height));
+            }
+            if (!g_Settings.marqueeScroll) return;
+            auto cv = weakCanvas.get();
+            auto tb = weakTitle.get();
+            if (cv && tb) StartMarqueeIfNeeded(cv, tb);
+        }));
+
+    // SizeChanged on the TextBlock re-evaluates marquee when text changes width.
+    g_TitleSizeChangedToken = title.SizeChanged(SizeChangedEventHandler(
+        [weakCanvas, weakTitle](IInspectable const&, SizeChangedEventArgs const&) {
+            auto cv = weakCanvas.get();
+            auto tb = weakTitle.get();
+            if (!cv || !tb) return;
+            if (g_Settings.marqueeScroll)
+                StartMarqueeIfNeeded(cv, tb);
+        }));
+
+    textCol.Children().Append(titleCanvas);
 
     TextBlock artist;
     artist.Name(kArtistName);
@@ -694,7 +774,6 @@ static Grid BuildWidget() {
     skipBack.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
     skipBack.Margin(ThicknessHelper::FromLengths(8, 0, 2, 0));
     skipBack.VerticalAlignment(VerticalAlignment::Center);
-    skipBack.Visibility(Visibility::Collapsed);
     AutomationProperties::SetName(skipBack, L"Skip backward");
     skipBack.Click(RoutedEventHandler(
         [](IInspectable const&, RoutedEventArgs const&) {
@@ -715,12 +794,13 @@ static Grid BuildWidget() {
     // Play/Pause
     Button playPause;
     playPause.Name(kPlayPauseName);
-    playPause.Content(box_value(hstring{L"▶"})); // ▶
+    playPause.Content(box_value(hstring{L"▶︎"})); // ▶ text-only rendering
     playPause.Background(MakeBrush(0x00, 0, 0, 0));
     playPause.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
     playPause.BorderThickness(ThicknessHelper::FromUniformLength(0));
-    playPause.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
+    playPause.Padding(ThicknessHelper::FromLengths(4, 2, 4, 2));
     playPause.Margin(ThicknessHelper::FromLengths(2, 0, 2, 0));
+    playPause.Width(30.0); // fixed width prevents layout shift when toggling ▶/⏸
     playPause.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetName(playPause, L"Play or pause");
     playPause.Click(RoutedEventHandler(
@@ -749,7 +829,6 @@ static Grid BuildWidget() {
     skipFwd.Padding(ThicknessHelper::FromLengths(6, 2, 6, 2));
     skipFwd.Margin(ThicknessHelper::FromLengths(2, 0, 0, 0));
     skipFwd.VerticalAlignment(VerticalAlignment::Center);
-    skipFwd.Visibility(Visibility::Collapsed);
     AutomationProperties::SetName(skipFwd, L"Skip forward");
     skipFwd.Click(RoutedEventHandler(
         [](IInspectable const&, RoutedEventArgs const&) {
@@ -892,6 +971,74 @@ static std::wstring FormatMs(int64_t ms, bool forceHours = false) {
     return std::wstring(buf);
 }
 
+// ---------- Marquee scroll helpers ----------
+
+// Convert seconds to WinRT TimeSpan (100-nanosecond intervals).
+static TimeSpan MakeTimeSpan(double seconds) {
+    return TimeSpan{ static_cast<int64_t>(seconds * 10'000'000) };
+}
+
+static void StopMarquee() {
+    if (g_MarqueeStoryboard) {
+        try { g_MarqueeStoryboard.Stop(); } catch (...) {}
+        g_MarqueeStoryboard = nullptr;
+    }
+}
+
+static void StartMarqueeIfNeeded(Canvas titleCanvas, TextBlock titleTb) {
+    StopMarquee();
+
+    double canvasW = titleCanvas.ActualWidth();
+    double textW   = titleTb.ActualWidth();  // natural width of copy 1
+
+    auto scroller = FindByName<StackPanel>(titleCanvas, kTitleScrollerName);
+
+    if (canvasW <= 0 || textW <= canvasW) {
+        // Text fits — reset scroller position and leave static.
+        if (scroller)
+            if (auto tt = scroller.RenderTransform().try_as<TranslateTransform>())
+                tt.X(0.0);
+        return;
+    }
+    if (!scroller) return;
+
+    // Cycle distance = title width + gap. At the end of one cycle the scroller
+    // has moved exactly enough that copy 2 sits where copy 1 started — the loop
+    // reset is invisible and copy 2 enters the clip before copy 1 fully exits.
+    constexpr double kGap = 48.0;
+    double cycleDist = textW + kGap;
+    double cycleSecs = cycleDist / 50.0;  // 50 px/s constant speed
+    double startPause = 2.0;
+    double totalSecs  = startPause + cycleSecs;
+
+    TranslateTransform tt = scroller.RenderTransform().as<TranslateTransform>();
+    tt.X(0.0);
+
+    DoubleAnimationUsingKeyFrames anim;
+
+    DiscreteDoubleKeyFrame kfHold;
+    kfHold.KeyTime(KeyTimeHelper::FromTimeSpan(MakeTimeSpan(startPause)));
+    kfHold.Value(0.0);
+    anim.KeyFrames().Append(kfHold);
+
+    LinearDoubleKeyFrame kfScroll;
+    kfScroll.KeyTime(KeyTimeHelper::FromTimeSpan(MakeTimeSpan(totalSecs)));
+    kfScroll.Value(-cycleDist);
+    anim.KeyFrames().Append(kfScroll);
+
+    anim.Duration(DurationHelper::FromTimeSpan(MakeTimeSpan(totalSecs)));
+    anim.RepeatBehavior(RepeatBehaviorHelper::Forever());
+
+    Storyboard sb;
+    Storyboard::SetTarget(anim, scroller);
+    Storyboard::SetTargetProperty(anim,
+        L"(UIElement.RenderTransform).(TranslateTransform.X)");
+    sb.Children().Append(anim);
+
+    g_MarqueeStoryboard = sb;
+    sb.Begin();
+}
+
 static void ApplyStateToWidget(Grid widget) {
     if (!widget) return;
 
@@ -940,6 +1087,7 @@ static void ApplyStateToWidget(Grid widget) {
     }
 
     auto titleTb    = FindByName<TextBlock>(widget, kTitleName);
+    auto titleTb2   = FindByName<TextBlock>(widget, kTitleName2);
     auto artistTb   = FindByName<TextBlock>(widget, kArtistName);
     auto playBtn    = FindByName<Button>(widget, kPlayPauseName);
     auto sessTb     = FindByName<TextBlock>(widget, kSessionCountName);
@@ -947,11 +1095,23 @@ static void ApplyStateToWidget(Grid widget) {
     auto skipBackBtn= FindByName<Button>(widget, kSkipBackName);
     auto artEl      = FindByName<Image>(widget, kAlbumArtName);
 
-    if (titleTb)
-        titleTb.Text(hasMedia ? title : L"");
+    if (titleTb) {
+        hstring newTitle{ hasMedia ? title : std::wstring{} };
+        if (titleTb.Text() != newTitle) {
+            // Only reset scroll when the text actually changes (new track).
+            // Play/pause and other state updates leave the animation running.
+            StopMarquee();
+            if (auto scroller = FindByName<StackPanel>(widget, kTitleScrollerName))
+                if (auto tt = scroller.RenderTransform().try_as<TranslateTransform>())
+                    tt.X(0.0);
+            titleTb.Text(newTitle);
+            if (titleTb2) titleTb2.Text(newTitle);
+            // SizeChanged fires after layout → StartMarqueeIfNeeded
+        }
+    }
 
     if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
-    if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
+    if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8\uFE0E" : L"\u25B6\uFE0E"}));
 
     // Audiobook mode: relabel artist field for screen readers (author vs. artist).
     if (artistTb)
@@ -967,6 +1127,7 @@ static void ApplyStateToWidget(Grid widget) {
         lightBg = g_Settings.adaptiveTextColor && IsSystemLightTheme();
     uint8_t fgHi = lightBg ? 0x1A : 0xFF;  // primary fg channel value
     if (titleTb)   titleTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
+    if (titleTb2)  titleTb2.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
     if (artistTb)  artistTb.Foreground(MakeBrush(0xB3, fgHi, fgHi, fgHi));
     if (sessTb)    sessTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
     auto btnFg = MakeBrush(0xFF, fgHi, fgHi, fgHi);
@@ -984,11 +1145,9 @@ static void ApplyStateToWidget(Grid widget) {
         }
     }
 
-    // 2c: Show skip buttons based on session capability
-    if (skipBackBtn)
-        skipBackBtn.Visibility(canSkipBackward ? Visibility::Visible : Visibility::Collapsed);
-    if (skipFwdBtn)
-        skipFwdBtn.Visibility(canSkipForward  ? Visibility::Visible : Visibility::Collapsed);
+    // 2c: Skip buttons always visible; dim when the source doesn't support them.
+    if (skipBackBtn) skipBackBtn.Opacity(canSkipBackward ? 1.0 : 0.35);
+    if (skipFwdBtn)  skipFwdBtn.Opacity(canSkipForward  ? 1.0 : 0.35);
 
     // Audiobook mode: relabel skip buttons for screen readers (chapter vs. track).
     if (skipBackBtn)
@@ -1263,6 +1422,15 @@ static void RemoveWidget() {
         g_RootGrid = nullptr;
     }
     if (!widget || !rootGrid) return;
+
+    // Stop marquee and revoke SizeChanged token before removing the widget.
+    StopMarquee();
+    if (g_TitleSizeChangedToken.value) {
+        if (auto tb = FindByName<TextBlock>(widget, kTitleName))
+            tb.SizeChanged(g_TitleSizeChangedToken);
+        g_TitleSizeChangedToken = {};
+    }
+
     try {
         auto weakGrid = make_weak(rootGrid);
         rootGrid.Dispatcher().RunAsync(
@@ -1868,12 +2036,20 @@ void Wh_ModSettingsChanged() {
                 auto g = weak.get();
                 if (!g) return;
                 g.Width((double)w);
-                g.Height((double)h);
                 if (auto art = FindByName<Image>(g, kAlbumArtName)) {
                     art.Width((double)h);
                     art.Height((double)h);
                 }
-                if (auto t = FindByName<TextBlock>(g, kTitleName))  t.FontSize(fs);
+                if (auto t  = FindByName<TextBlock>(g, kTitleName))  t.FontSize(fs);
+                if (auto t2 = FindByName<TextBlock>(g, kTitleName2)) t2.FontSize(fs);
+                if (auto tc = FindByName<Canvas>(g, kTitleCanvasName)) {
+                    tc.Height(fs * 1.6);
+                    if (auto clip = tc.Clip().try_as<RectangleGeometry>()) {
+                        auto r = clip.Rect();
+                        clip.Rect(RectHelper::FromCoordinatesAndDimensions(
+                            0, 0, r.Width, (float)(fs * 1.6)));
+                    }
+                }
                 if (auto a = FindByName<TextBlock>(g, kArtistName)) a.FontSize(fs);
                 if (auto ts = FindByName<TextBlock>(g, kTimestampName))
                     ts.FontSize(std::max(8.0, fs - 2.0));
