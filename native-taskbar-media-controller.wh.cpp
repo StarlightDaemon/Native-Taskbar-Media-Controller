@@ -42,6 +42,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
 | Hide when fullscreen | true | |
 | Show track progress bar | true | Slim bar at the widget bottom showing playback position |
 | Adaptive text color | true | Matches text brightness to album art |
+| Scroll long title (marquee) | true | Pauses 2 s, scrolls at 40 px/s, pauses 1 s, repeats |
 
 ## Requirements
 
@@ -66,6 +67,9 @@ z-ordering, auto-hide support, and DPI handling automatically.
   $name: Show track progress bar
 - AdaptiveTextColor: true
   $name: Adaptive text color (follows Windows light/dark theme)
+- MarqueeTitle: true
+  $name: Scroll long title (marquee)
+  $description: Smoothly scrolls the title when it is too wide to fit the widget
 */
 // ==/WindhawkModSettings==
 
@@ -158,6 +162,7 @@ struct ModSettings {
     bool hideFullscreen = true;
     bool showProgress = true;
     bool adaptiveTextColor = true;
+    bool marqueeTitle = true;
 } g_Settings;
 
 // Writes a plain-text line to C:\wh-media-boot.log so cold-start crashes are
@@ -186,6 +191,7 @@ static void LoadSettings() {
     g_Settings.hideFullscreen    = Wh_GetIntSetting(L"HideFullscreen") != 0;
     g_Settings.showProgress      = Wh_GetIntSetting(L"ShowProgress") != 0;
     g_Settings.adaptiveTextColor = Wh_GetIntSetting(L"AdaptiveTextColor") != 0;
+    g_Settings.marqueeTitle      = Wh_GetIntSetting(L"MarqueeTitle") != 0;
     if (g_Settings.panelWidth   <= 0) g_Settings.panelWidth = 300;
     if (g_Settings.panelHeight  <= 0) g_Settings.panelHeight = 40;
     if (g_Settings.fontSize     <= 0) g_Settings.fontSize = 11;
@@ -237,6 +243,7 @@ constexpr std::wstring_view kSessionCountName = L"NowPlayingSessionCount";
 constexpr std::wstring_view kAlbumArtName     = L"NowPlayingAlbumArt";
 constexpr std::wstring_view kProgressTrackName = L"NowPlayingProgressTrack";
 constexpr std::wstring_view kProgressFillName  = L"NowPlayingProgressFill";
+constexpr std::wstring_view kTitleClipName     = L"NowPlayingTitleClip";
 constexpr std::wstring_view kTaskbarFrameClass  = L"Taskbar.TaskbarFrame";
 constexpr std::wstring_view kRootGridName       = L"RootGrid";
 constexpr std::wstring_view kSystemTrayGridName = L"SystemTrayFrameGrid";
@@ -253,6 +260,16 @@ static std::atomic<bool> g_Unloading{ false };
 static HANDLE g_PollThread = nullptr;
 static HANDLE g_PollStop = nullptr;
 static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
+
+// Marquee state — accessed exclusively on the UI dispatcher thread; no mutex needed.
+static DispatcherTimer               g_MarqueeTimer{ nullptr };
+static weak_ref<TextBlock>           g_TitleTb;
+static weak_ref<TranslateTransform>  g_TitleXform;
+static weak_ref<Border>              g_TitleClip;
+static double g_MarqueeOffset    = 0.0;  // current X translation (≤ 0)
+static double g_MarqueeOverflow  = 0.0;  // pixels title extends past clip container
+static int    g_MarqueePhase     = 0;    // 0=start-pause  1=scrolling  2=end-pause
+static int    g_MarqueePauseTicks = 0;   // countdown ticks for the active pause
 
 // ---------- Helpers ----------
 // Cached vtable slot index — avoids rescanning every hook call once found.
@@ -530,6 +547,27 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
     }
 }
 
+// Always called on the UI dispatcher thread.
+static void ResetAndStartMarqueeIfOverflow() {
+    if (!g_Settings.marqueeTitle || !g_MarqueeTimer) return;
+    auto tb   = g_TitleTb.get();
+    auto clip = g_TitleClip.get();
+    auto xf   = g_TitleXform.get();
+    if (!tb || !clip || !xf) return;
+
+    g_MarqueeTimer.Stop();
+    xf.X(0.0);
+    g_MarqueeOffset = 0.0;
+
+    double overflow = tb.ActualWidth() - clip.ActualWidth();
+    if (overflow > 1.0) {
+        g_MarqueeOverflow    = overflow;
+        g_MarqueePhase       = 0;
+        g_MarqueePauseTicks  = static_cast<int>(2000.0 / 16.0);  // 2 s at 16 ms/tick
+        g_MarqueeTimer.Start();
+    }
+}
+
 // ---------- Widget construction ----------
 static Grid BuildWidget() {
     Grid root;
@@ -556,10 +594,19 @@ static Grid BuildWidget() {
     Grid::SetRowSpan(root, 9999);
     // Margin.Right is set dynamically via UpdateWidgetMargin() once tray width is known.
 
-    StackPanel layout;
-    layout.Orientation(Orientation::Horizontal);
+    Grid layout;
+    layout.HorizontalAlignment(HorizontalAlignment::Stretch);
     layout.VerticalAlignment(VerticalAlignment::Center);
     layout.Margin(ThicknessHelper::FromLengths(8.0, 0.0, 8.0, 0.0));
+
+    auto& cols = layout.ColumnDefinitions();
+    for (int i = 0; i < 6; ++i) {
+        ColumnDefinition cd;
+        cd.Width(i == 2
+            ? GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star)
+            : GridLengthHelper::Auto());
+        cols.Append(cd);
+    }
 
     // Album art — square thumbnail at the left edge of the widget.
     // Hidden until art is loaded; size matches panel height for a flush square.
@@ -571,6 +618,7 @@ static Grid BuildWidget() {
     albumArt.VerticalAlignment(VerticalAlignment::Stretch);
     albumArt.Margin(ThicknessHelper::FromLengths(0, 0, 6, 0));  // 6 px gap before text
     albumArt.Visibility(Visibility::Collapsed);        // revealed once bitmap is loaded
+    Grid::SetColumn(albumArt, 0);
     layout.Children().Append(albumArt);                // first child (inserted before session chip below)
 
     // Session count chip (collapsed by default)
@@ -592,21 +640,42 @@ static Grid BuildWidget() {
             e.Handled(true);
             RefreshWidgetUI();
         }));
+    Grid::SetColumn(sessionCount, 1);
     layout.Children().Append(sessionCount);
 
     // Title / artist column
     StackPanel textCol;
     textCol.Orientation(Orientation::Vertical);
     textCol.VerticalAlignment(VerticalAlignment::Center);
-    textCol.MaxWidth(180.0);
+
+    // Clip container — clips overflow; marquee TranslateTransform scrolls inside it.
+    Border titleClip;
+    titleClip.Name(kTitleClipName);
+    titleClip.ClipToBounds(true);
+    titleClip.HorizontalAlignment(HorizontalAlignment::Stretch);
+    g_TitleClip = make_weak(titleClip);
+
+    TranslateTransform titleXform;
+    g_TitleXform = make_weak(titleXform);
 
     TextBlock title;
     title.Name(kTitleName);
     title.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
     title.FontSize((double)g_Settings.fontSize);
-    title.TextTrimming(TextTrimming::CharacterEllipsis);
+    // TextTrimming is set dynamically in ApplyStateToWidget.
     title.TextWrapping(TextWrapping::NoWrap);
     title.MaxLines(1);
+    title.HorizontalAlignment(HorizontalAlignment::Left);  // Left so ActualWidth = natural
+                                                           // text width (not container width)
+    title.RenderTransform(titleXform);
+    g_TitleTb = make_weak(title);
+
+    title.SizeChanged([](IInspectable const&, SizeChangedEventArgs const&) {
+        ResetAndStartMarqueeIfOverflow();
+    });
+
+    titleClip.Child(title);
+    textCol.Children().Append(titleClip);
 
     TextBlock artist;
     artist.Name(kArtistName);
@@ -616,8 +685,8 @@ static Grid BuildWidget() {
     artist.TextWrapping(TextWrapping::NoWrap);
     artist.MaxLines(1);
 
-    textCol.Children().Append(title);
     textCol.Children().Append(artist);
+    Grid::SetColumn(textCol, 2);
     layout.Children().Append(textCol);
 
     // 2c: Skip Backward — 30-second rewind; shown only when session enables it
@@ -645,6 +714,7 @@ static Grid BuildWidget() {
                 try { s.TrySkipPreviousAsync(); } WH_CATCH(L"SkipBack/SkipPrevious")
             }
         }));
+    Grid::SetColumn(skipBack, 3);
     layout.Children().Append(skipBack);
 
     // Play/Pause
@@ -671,6 +741,7 @@ static Grid BuildWidget() {
                 try { s.TryTogglePlayPauseAsync(); } WH_CATCH(L"PlayPause/TogglePlayPause")
             }
         }));
+    Grid::SetColumn(playPause, 4);
     layout.Children().Append(playPause);
 
     // Next track (hidden when SkipForward is available, to avoid redundancy)
@@ -697,6 +768,7 @@ static Grid BuildWidget() {
                 try { s.TrySkipNextAsync(); } WH_CATCH(L"Next/SkipNext")
             }
         }));
+    Grid::SetColumn(next, 5);
     layout.Children().Append(next);
 
     // 2c: Skip Forward — 30-second advance; shown only when session enables it
@@ -724,6 +796,7 @@ static Grid BuildWidget() {
                 try { s.TrySkipNextAsync(); } WH_CATCH(L"SkipFwd/SkipForward")
             }
         }));
+    Grid::SetColumn(skipFwd, 5);
     layout.Children().Append(skipFwd);
 
     root.Children().Append(layout);
@@ -759,6 +832,42 @@ static Grid BuildWidget() {
             if (!aumid.empty()) BringSourceAppToFront(aumid);
             e.Handled(true);
         }));
+
+    // Marquee DispatcherTimer — 16 ms ≈ 60 fps; created once on the UI thread.
+    DispatcherTimer marqTimer;
+    marqTimer.Interval(TimeSpan{ 160'000LL });  // 100-ns ticks; 160,000 = 16 ms
+    marqTimer.Tick([](IInspectable const& sender, IInspectable const&) {
+        if (g_Unloading.load()) {
+            if (auto t = sender.try_as<DispatcherTimer>()) t.Stop();
+            return;
+        }
+        auto xf = g_TitleXform.get();
+        if (!xf) return;
+
+        switch (g_MarqueePhase) {
+        case 0:  // start pause
+            if (--g_MarqueePauseTicks <= 0) g_MarqueePhase = 1;
+            break;
+        case 1:  // scrolling left
+            g_MarqueeOffset -= 40.0 * 16.0 / 1000.0;   // 40 px/s
+            if (g_MarqueeOffset <= -g_MarqueeOverflow) {
+                g_MarqueeOffset     = -g_MarqueeOverflow;
+                g_MarqueePhase      = 2;
+                g_MarqueePauseTicks = static_cast<int>(1000.0 / 16.0);  // 1 s end pause
+            }
+            xf.X(g_MarqueeOffset);
+            break;
+        case 2:  // end pause
+            if (--g_MarqueePauseTicks <= 0) {
+                g_MarqueeOffset     = 0.0;
+                xf.X(0.0);
+                g_MarqueePhase      = 0;
+                g_MarqueePauseTicks = static_cast<int>(2000.0 / 16.0);  // 2 s start pause
+            }
+            break;
+        }
+    });
+    g_MarqueeTimer = marqTimer;
 
     return root;
 }
@@ -832,7 +941,25 @@ static void ApplyStateToWidget(Grid widget) {
     auto skipBackBtn= FindByName<Button>(widget, kSkipBackName);
     auto artEl      = FindByName<Image>(widget, kAlbumArtName);
 
-    if (titleTb)  titleTb.Text(hasMedia ? title         : L"");
+    if (titleTb) {
+        titleTb.Text(hasMedia ? title : L"");
+        // When marquee is on: trimming is disabled; Border.ClipToBounds handles clipping.
+        // When marquee is off: standard CharacterEllipsis fallback.
+        titleTb.TextTrimming(g_Settings.marqueeTitle ? TextTrimming::None
+                                                     : TextTrimming::CharacterEllipsis);
+    }
+
+    // Stop any running scroll immediately; re-check overflow after the layout pass.
+    if (g_Settings.marqueeTitle && g_MarqueeTimer) {
+        g_MarqueeTimer.Stop();
+        if (auto xf = g_TitleXform.get()) xf.X(0.0);
+        if (hasMedia) {
+            widget.Dispatcher().RunAsync(
+                Windows::UI::Core::CoreDispatcherPriority::Low,
+                []() { ResetAndStartMarqueeIfOverflow(); });
+        }
+    }
+
     if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
 
@@ -1683,6 +1810,13 @@ void Wh_ModUninit() {
         g_MediaStateCount = 0;
         g_SessionManager = nullptr;
     }
+
+    // Null COM references so marquee objects are released. g_Unloading causes the
+    // timer tick to call Stop() on the UI thread — do NOT call Stop() here (wrong thread).
+    g_MarqueeTimer = nullptr;
+    g_TitleTb      = {};
+    g_TitleXform   = {};
+    g_TitleClip    = {};
 
     RemoveWidget();
 
