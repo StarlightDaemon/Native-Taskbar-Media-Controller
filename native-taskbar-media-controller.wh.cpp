@@ -1156,8 +1156,8 @@ static void InjectWidgetInto(Grid rootGrid) {
             std::lock_guard<std::mutex> g(g_WidgetMutex);
             g_WidgetRoot = make_weak(existing);
             g_RootGrid   = make_weak(rootGrid);
-            ApplyStateToWidget(existing);
         }
+        ApplyStateToWidget(existing);
         // Signal even on the "already present" path — the GSMTC thread waits
         // on this event and the widget is ready either way.
         if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
@@ -1497,9 +1497,12 @@ static void DoEnumerateAndRefresh() {
 static DWORD WINAPI GsmtcThreadFunc(LPVOID) {
     // Guard against the narrow race where the thread is created just as uninit begins.
     if (g_Unloading.load()) return 0;
+    bool staOk = false;
     try {
         init_apartment(apartment_type::single_threaded);
+        staOk = true;
     } WH_CATCH(L"GsmtcThread/STA")
+    if (!staOk) return 0;
 
     if (HANDLE ev = g_GsmtcStartEvent.load()) WaitForSingleObject(ev, INFINITE);
 
@@ -1626,8 +1629,6 @@ static DWORD WINAPI FullscreenPollThread(LPVOID) {
         // is gated by monitor: only hide if the D3D app is on the taskbar's monitor.
         bool hide = !IsTaskbarEffectivelyVisible(hTaskbar)
                  || (state == QUNS_PRESENTATION_MODE)
-                 || (state == QUNS_RUNNING_D3D_FULL_SCREEN
-                     && IsForegroundWindowFullscreen(hTaskbarMon))
                  || IsForegroundWindowFullscreen(hTaskbarMon);
 
         Grid widget{ nullptr };
@@ -1736,7 +1737,7 @@ static void PollForTaskbarViewDll() {
             bool already = g_TaskbarViewDllLoaded.exchange(true);
             if (already) break;
 
-            HookTaskbarViewDllSymbols(m);
+            if (!HookTaskbarViewDllSymbols(m)) break;
             Wh_ApplyHookOperations();
             // All deferred initialization: hooks are installed and XAML is confirmed
             // loaded, so it is safe to create threads that touch COM/WinRT state.
@@ -1852,6 +1853,10 @@ void Wh_ModSettingsChanged() {
                 if (!g) return;
                 g.Width((double)w);
                 g.Height((double)h);
+                if (auto art = FindByName<Image>(g, kAlbumArtName)) {
+                    art.Width((double)h);
+                    art.Height((double)h);
+                }
                 if (auto t = FindByName<TextBlock>(g, kTitleName))  t.FontSize(fs);
                 if (auto a = FindByName<TextBlock>(g, kArtistName)) a.FontSize(fs);
                 if (auto ts = FindByName<TextBlock>(g, kTimestampName))
