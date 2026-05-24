@@ -17,7 +17,7 @@ Build a native XAML-injected Windhawk mod that adds a media controller to the Wi
 Operator decision required on prioritization. Top candidates by synthesis rating:
 
 **Recommended (MULTI-UNIT-INTEGRATION):**
-- SC-SP-1: Seek bar (memeri121)
+- ~~SC-SP-1: Seek bar (memeri121)~~ — **NOT WANTED. Will not be implemented.**
 - SC-HT-1: LRC lyrics (HibritTofas)
 - SC-GR-1: FFT audio visualizer (GR0UD) — requires process compatibility audit first
 

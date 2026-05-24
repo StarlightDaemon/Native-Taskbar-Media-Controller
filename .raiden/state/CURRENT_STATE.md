@@ -1,9 +1,9 @@
 # Current State
 
-## v1.0.0 — Released (2026-05-24)
+## v1.0.1 — In progress (2026-05-24)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `1.0.0`  
+Version: `1.0.1`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
 Latest release tag: `v1.0.0` (2026-05-24)
 
@@ -38,8 +38,14 @@ Latest release tag: `v1.0.0` (2026-05-24)
 **Phase 3 confirmed scope:** `BackgroundStyle` — None / Acrylic / Chameleon ✓  
 **Release gate:** Log cleanup ✓ — v1.0.0 tagged and pushed
 
-**Post-v1.0.0 candidates (ordered by value):**
-1. SC-SP-1 — Interactive seek bar (highest user value; Libby timeline confirmation unblocks priority)
+**v1.0.1 patch (2026-05-24) — SMTC compatibility audit fixes:**
+- **Docs:** Corrected in-mod readme compatibility notes for Firefox and Chromium browsers (both incorrectly claimed timeline data was available)
+- **Defect:** `ExtractExeHint` now handles Store AUMIDs with a generic `!App` AppId; Edge Store AUMID (`Microsoft.MicrosoftEdge.Stable_8wekyb3d8bbwe!App`) now correctly resolves to `"msedge"` and classifies as `Browser`
+- **Defect:** `ClassifySessionSource` gains a substring fallback for unknown Store AUMIDs where `ExtractExeHint` returns a full package family name
+- **Defect:** Audiobook detection adds a secondary heuristic — `"Chapter "` keyword in title + duration > 15 minutes — to catch short Libby/Audiobookshelf chapters that would previously fall through as NativeApp music
+
+**Post-v1.0.1 candidates (ordered by value):**
+1. ~~SC-SP-1 — Interactive seek bar~~ **NOT WANTED — will not be implemented.** Explicitly out of scope; do not revisit.
 2. SC-UI-1 — Blurred album art background (rendering pipeline review needed)
 3. SC-HT-1 — LRC lyrics overlay (significant scope increase)
 4. SC-GR-1 — FFT audio visualizer (process compatibility audit required)
