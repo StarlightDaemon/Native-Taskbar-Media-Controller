@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.0.0
+// @version         1.0.1
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -47,9 +47,9 @@ DPI handling automatically.
 
 - **Browsers** (Chrome, Edge, Brave, Opera, Vivaldi, Arc, Thorium):
   one SMTC session per browser process; all tabs share it. Timeline data
-  is available for most Chromium-based browsers.
-- **Firefox**: fully supported — media info and timeline data are exposed by
-  current Firefox versions.
+  is not available from browser sessions.
+- **Firefox**: media info is fully supported; timeline data is not available
+  (Mozilla Bugzilla 1689538).
 - **Audiobook apps**: Libby/OverDrive and similar apps that expose chapter
   navigation are fully supported. Audible's Windows app does not register
   SMTC sessions and is not supported.
@@ -425,6 +425,14 @@ static std::wstring ExtractExeHint(const std::wstring& aumid) {
         for (auto& c : post) c = (wchar_t)towlower(c);
         if (post.size() >= 4 && post.substr(post.size() - 4) == L".exe")
             post = post.substr(0, post.size() - 4);
+        // Generic sentinel AppId — the package family name in pre-bang is more
+        // useful. Map known package-family substrings to their exe stems so that
+        // ClassifySessionSource and BringSourceAppToFront both work correctly.
+        // Example: "Microsoft.MicrosoftEdge.Stable_8wekyb3d8bbwe!App" → "msedge".
+        if (post == L"app") {
+            if (lower_pre.find(L"microsoftedge") != std::wstring::npos) return L"msedge";
+            return lower_pre;  // unknown Store app; ClassifySessionSource handles it
+        }
         return post;
     }
     return lower_pre;
@@ -445,6 +453,9 @@ static SessionSource ClassifySessionSource(const std::wstring& aumid) {
     for (const auto& b : kBrowserStems) {
         if (stem == b) return SessionSource::Browser;
     }
+    // Fallback for Store AUMIDs with a generic AppId: ExtractExeHint returns the
+    // package family name. Check for known browser package-name substrings.
+    if (stem.find(L"microsoftedge") != std::wstring::npos) return SessionSource::Browser;
     return SessionSource::NativeApp;
 }
 
@@ -1373,9 +1384,14 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
         }
     } WH_CATCH(L"UpdateOneSessionAsync/Timeline")
 
-    // Audiobook detection: session is audiobook mode when duration exceeds 1 hour.
-    // Evaluated after the timeline read so durMs reflects the current value.
-    bool isAb = (durMs > 3'600'000LL);  // > 1 hour
+    // Audiobook detection: > 1 hour is the primary signal. A chapter keyword in
+    // the title ("Chapter N") combined with > 15 minutes catches short audiobook
+    // chapters (common in Libby and Audiobookshelf) that would otherwise fall
+    // through as NativeApp music. "Part " is intentionally excluded — too many
+    // false positives from music tracks (concept albums, classical works).
+    bool hasChapterKeyword = (title.find(L"Chapter ") != std::wstring::npos);
+    bool isAb = (durMs > 3'600'000LL) ||
+                (durMs > 900'000LL && hasChapterKeyword);
 
     // Build formatted position string: HH:MM:SS when hours present, else MM:SS.
     std::wstring posFmt;
