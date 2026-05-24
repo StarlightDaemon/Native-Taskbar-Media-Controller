@@ -1,11 +1,11 @@
 # Current State
 
-## SC-UI-3 — Implemented (v0.2.0-beta.5)
+## SC-UI-3 — Implemented (v0.2.0-beta.5) | OL-9 — Implemented (v0.2.0-beta.6)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `0.2.0-beta.5`  
+Version: `0.2.0-beta.6`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
-Latest release tag: `v0.2.0-beta.5` (2026-05-23)
+Latest release tag: `v0.2.0-beta.6` (2026-05-23)
 
 **Branch state:**
 - `main` — fully pushed and tagged at `v0.2.0-beta.5`
@@ -28,16 +28,16 @@ Latest release tag: `v0.2.0-beta.5` (2026-05-23)
 - **Acrylic background:** `AcrylicBrush(HostBackdrop)` on widget root; falls back to semi-transparent dark if compositor rejects
 - **SC-UI-3 — Grid layout refactor:** Replaced horizontal `StackPanel` with a 6-column `Grid` (Auto, Auto, `*`, Auto, Auto, Auto); text column fills remaining space via star sizing; removed hardcoded `MaxWidth(180)`
 - **SC-UI-3 — Marquee scroll:** Long titles scroll smoothly when wider than clip container — `DispatcherTimer` at 16 ms drives a `TranslateTransform` inside a `Border(ClipToBounds)`; 2 s start-pause → 40 px/s left → 1 s end-pause → instant reset; fires only on overflow; gated by `MarqueeTitle` setting (default true); artist row unchanged (CharacterEllipsis)
+- **OL-9 — BackgroundStyle setting:** `BackgroundStyle` enum with three values — `None` (transparent root Grid), `Acrylic` (existing `AcrylicBrush(HostBackdrop)` with dark-fallback, now gated), `Chameleon` (dominant-color `LinearGradientBrush` via 64-bucket RGB histogram, updates per art load, transparent when no art); default `Acrylic` preserves beta.5 behaviour; adaptive text color driven by Chameleon luma (BT.601) when mode=2; all modes applied live in `ApplyStateToWidget()` (no widget rebuild needed on setting change)
 
 **Cold-boot crash — RESOLVED (2026-05-22, beta.2.8):**
 Explorer crashed 100% of the time on true cold boot because `Wh_ModInit` created 3 threads during Explorer's hazardous early-boot window. Fixed by reducing cold-start `Wh_ModInit` to a single poll thread; all other initialization deferred to `PollForTaskbarViewDll` after `Taskbar.View.dll` is confirmed loaded.
 
 **Open loops:**
-- OL-9: Phase 3 background theming (`BackgroundStyle` setting — None / Acrylic / Chameleon) — not yet started
 - BootLog diagnostic calls intentionally retained through v1.0.0 — strip at release time
 
 **Phase 2 confirmed scope:** SC-CH-1 ✓, SC-UI-2 ✓, SC-M-2 ✓, SC-KV-4 ✓  
 **SC-UI-3 confirmed scope:** Grid layout refactor ✓, marquee scroll ✓  
-**Phase 3 confirmed scope:** `BackgroundStyle` setting — None / Acrylic / Chameleon (OL-9)
+**Phase 3 confirmed scope:** `BackgroundStyle` setting — None / Acrylic / Chameleon (OL-9) ✓ — shipped v0.2.0-beta.6
 
-**Next:** Phase 3 — `BackgroundStyle` setting (OL-9). Gate: confirm `AcrylicBrush` composites correctly in Explorer's XAML tree before shipping Acrylic option.
+**Next:** User live-test of Chameleon gradient on Spotify; strip BootLog calls before v1.0.0.

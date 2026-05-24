@@ -33,18 +33,19 @@ Shipped 2026-05-23 as `v0.2.0-beta.5`:
   1 s end-pause → instant reset; fires only when text overflows the clip container.
   Gated by `MarqueeTitle` setting (default true). Artist row unchanged (CharacterEllipsis).
 
-## OL-9: Phase 3 — Background theming
+## ~~OL-9: Phase 3 — Background theming~~ CLOSED
 
-Decided 2026-05-23. Two theming options to be implemented under a single `BackgroundStyle` setting:
+Shipped 2026-05-23 as `v0.2.0-beta.6`:
 
-- **Acrylic** — `AcrylicBrush` on the XAML panel background; no art processing; needs compositor compatibility test inside Explorer's injected XAML tree first
-- **Chameleon** — `LinearGradientBrush` derived from album art via 64-bucket color quantization (SC-HT-2); runs after art loads; adaptive text color (SC-UI-2) feeds from same palette
+- **BackgroundStyle = 0 (None)** — `root.Background(nullptr)`; widget root is fully transparent.
+- **BackgroundStyle = 1 (Acrylic)** — `AcrylicBrush(HostBackdrop)` with dark semi-transparent
+  fallback when compositor rejects it. Default value; preserves beta.5 behaviour for existing users.
+- **BackgroundStyle = 2 (Chameleon)** — `LinearGradientBrush` derived from album art via 64-bucket
+  RGB histogram quantization; two dominant colors form a horizontal gradient; transparent when no
+  art is present. Adaptive text color driven by BT.601 luma of dominant color (`g_ChameleonLightBg`
+  atomic) instead of `IsSystemLightTheme()` when this mode is active.
 
-**Setting shape:** `BackgroundStyle` enum: `None` / `Acrylic` / `Chameleon`
-
-**Prerequisite:** SC-UI-2 (adaptive text color) should ship in Phase 2 first — Phase 3 Chameleon path extends it.
-
-**Gate:** Confirm `AcrylicBrush` composites correctly in Explorer's XAML tree before shipping Acrylic option. If compositor rejects it, remove that enum value; Chameleon is unaffected.
+All three modes are applied live in `ApplyStateToWidget()` — no widget rebuild on setting change.
 
 ## ~~OL-6: Libby audiobook support review & refinement~~ CLOSED
 

@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.2.0-beta.5
+// @version         0.2.0-beta.6
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -44,6 +44,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
 | Show track progress bar | true | Slim bar at the widget bottom showing playback position |
 | Adaptive text color | true | Matches text brightness to album art |
 | Scroll long title (marquee) | true | Pauses 2 s, scrolls at 40 px/s, pauses 1 s, repeats |
+| Background style | Acrylic | Transparent / Acrylic (frosted glass) / Chameleon (album art gradient) |
 
 ## Requirements
 
@@ -71,6 +72,13 @@ z-ordering, auto-hide support, and DPI handling automatically.
 - MarqueeTitle: true
   $name: Scroll long title (marquee)
   $description: Smoothly scrolls the title when it is too wide to fit the widget
+- BackgroundStyle: 1
+  $name: Background style
+  $description: "0 = None (transparent), 1 = Acrylic (frosted glass), 2 = Chameleon (album art gradient)"
+  $options:
+  - 0: None
+  - 1: Acrylic
+  - 2: Chameleon
 */
 // ==/WindhawkModSettings==
 
@@ -81,6 +89,7 @@ z-ordering, auto-hide support, and DPI handling automatically.
 #include <shellapi.h>
 #include <shlobj.h>
 #include <propsys.h>
+#include <windows.graphics.imaging.interop.h>  // IMemoryBufferByteAccess
 // PKEY_AppUserModel_ID is declared extern in propkey.h but not exported by the
 // MinGW/lld propsys stub. Define the key locally using its well-known GUID/PID.
 static const PROPERTYKEY kPKEY_AppUserModel_ID = {
@@ -116,6 +125,7 @@ static const PROPERTYKEY kPKEY_AppUserModel_ID = {
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.UI.Xaml.Shapes.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.Graphics.Imaging.h>
 
 using namespace winrt;
 using namespace Windows::Foundation;
@@ -128,6 +138,7 @@ using namespace Windows::UI::Xaml::Input;
 using namespace Windows::UI::Xaml::Media;
 using namespace Windows::UI::Xaml::Media::Imaging;
 using namespace Windows::Storage::Streams;
+using namespace Windows::Graphics::Imaging;
 
 // WH_CATCH logs hresult, std::exception, and unknown exceptions with a context label.
 // Usage: try { ... } WH_CATCH(L"context")
@@ -164,6 +175,7 @@ struct ModSettings {
     bool showProgress = true;
     bool adaptiveTextColor = true;
     bool marqueeTitle = true;
+    int backgroundStyle = 1;  // 0=None 1=Acrylic 2=Chameleon
 } g_Settings;
 
 // Writes a plain-text line to C:\wh-media-boot.log so cold-start crashes are
@@ -193,10 +205,13 @@ static void LoadSettings() {
     g_Settings.showProgress      = Wh_GetIntSetting(L"ShowProgress") != 0;
     g_Settings.adaptiveTextColor = Wh_GetIntSetting(L"AdaptiveTextColor") != 0;
     g_Settings.marqueeTitle      = Wh_GetIntSetting(L"MarqueeTitle") != 0;
+    g_Settings.backgroundStyle   = Wh_GetIntSetting(L"BackgroundStyle");
     if (g_Settings.panelWidth   <= 0) g_Settings.panelWidth = 300;
     if (g_Settings.panelHeight  <= 0) g_Settings.panelHeight = 40;
     if (g_Settings.fontSize     <= 0) g_Settings.fontSize = 11;
     if (g_Settings.offsetX      <  0) g_Settings.offsetX = 8;
+    if (g_Settings.backgroundStyle < 0 || g_Settings.backgroundStyle > 2)
+        g_Settings.backgroundStyle = 1;
 }
 
 // ---------- GSMTC multi-session state ----------
@@ -258,6 +273,7 @@ static std::atomic<bool> g_ScanPending{ false };
 static std::atomic<bool> g_TaskbarViewDllLoaded{ false };
 static std::atomic<int> g_HookCallCounter{ 0 };
 static std::atomic<bool> g_Unloading{ false };
+static std::atomic<bool> g_ChameleonLightBg{ false };  // set by art loader; read in ApplyStateToWidget
 static HANDLE g_PollThread = nullptr;
 static HANDLE g_PollStop = nullptr;
 static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
@@ -577,17 +593,7 @@ static Grid BuildWidget() {
     root.Height((double)g_Settings.panelHeight);
     root.HorizontalAlignment(HorizontalAlignment::Right);
     root.VerticalAlignment(VerticalAlignment::Center);
-    // Phase 3 gate: test AcrylicBrush in Explorer's injected XAML tree.
-    // Falls back to dark semi-transparent if compositor rejects it.
-    try {
-        AcrylicBrush acrylic;
-        acrylic.BackgroundSource(AcrylicBackgroundSource::HostBackdrop);
-        acrylic.TintColor(ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
-        acrylic.TintOpacity(0.6);
-        root.Background(acrylic);
-    } catch (...) {
-        root.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
-    }
+    // Background is applied dynamically in ApplyStateToWidget() based on BackgroundStyle setting.
     root.CornerRadius(CornerRadiusHelper::FromUniformRadius(8.0));
     Canvas::SetZIndex(root, 2);
     // Span all columns so right-alignment is relative to full taskbar width.
@@ -873,6 +879,65 @@ static Grid BuildWidget() {
     return root;
 }
 
+// Returns up to two dominant RGBA colors from album art via 64-bucket quantization.
+// Each RGB channel is reduced to 2 bits (6 bits discarded), giving 4^3 = 64 buckets.
+// Returns {primary, secondary} — secondary equals primary when only one bucket dominates.
+// Pixel format must be Bgra8 (enforced by the caller via GetSoftwareBitmapAsync).
+static std::pair<Windows::UI::Color, Windows::UI::Color>
+ComputeDominantColors(SoftwareBitmap const& bmp) {
+    auto buf  = bmp.LockBuffer(BitmapBufferAccessMode::Read);
+    auto ref  = buf.CreateReference();
+    auto desc = buf.GetPlaneDescription(0);
+
+    // Obtain raw byte pointer via IMemoryBufferByteAccess COM interface.
+    uint32_t capacity = 0;
+    uint8_t const* px = nullptr;
+    {
+        auto byteAccess = ref.as<::Windows::Foundation::IMemoryBufferByteAccess>();
+        byteAccess->GetBuffer(const_cast<uint8_t**>(&px), &capacity);
+    }
+    if (!px) return { ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A),
+                     ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A) };
+
+    int stride = desc.Stride;
+    int width  = desc.Width;
+    int height = desc.Height;
+
+    // 64-bucket histogram: bucket = (R>>6)<<4 | (G>>6)<<2 | (B>>6)
+    uint32_t counts[64]{};
+    uint32_t sumR[64]{}, sumG[64]{}, sumB[64]{};
+
+    for (int y = 0; y < height; ++y) {
+        uint8_t const* row = px + y * stride;
+        for (int x = 0; x < width * 4; x += 4) {  // Bgra8: B G R A
+            uint8_t b = row[x], g = row[x+1], r = row[x+2];
+            int bucket = ((r>>6)<<4) | ((g>>6)<<2) | (b>>6);
+            counts[bucket]++;
+            sumR[bucket] += r;
+            sumG[bucket] += g;
+            sumB[bucket] += b;
+        }
+    }
+
+    // Find top two buckets by count.
+    int top1 = 0, top2 = 0;
+    for (int i = 1; i < 64; ++i) {
+        if (counts[i] > counts[top1]) { top2 = top1; top1 = i; }
+        else if (i != top1 && counts[i] > counts[top2]) { top2 = i; }
+    }
+
+    auto avgColor = [&](int bucket) -> Windows::UI::Color {
+        uint32_t c = counts[bucket];
+        if (c == 0) return ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A);
+        return ColorHelper::FromArgb(0xFF,
+            (uint8_t)(sumR[bucket]/c),
+            (uint8_t)(sumG[bucket]/c),
+            (uint8_t)(sumB[bucket]/c));
+    };
+
+    return { avgColor(top1), counts[top2] > 0 ? avgColor(top2) : avgColor(top1) };
+}
+
 template <typename T>
 static T FindByName(FrameworkElement parent, std::wstring_view name) {
     if (!parent) return nullptr;
@@ -964,11 +1029,15 @@ static void ApplyStateToWidget(Grid widget) {
     if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8" : L"\u25B6"}));
 
-    // SC-UI-2: adaptive foreground follows Windows light/dark app theme.
-    // Light theme → near-black; dark theme → white. Applied to text, buttons,
-    // session chip, and progress bar so every element adapts together.
-    bool lightTheme = g_Settings.adaptiveTextColor && IsSystemLightTheme();
-    uint8_t fgHi = lightTheme ? 0x1A : 0xFF;  // primary fg channel value
+    // SC-UI-2: adaptive foreground follows Windows light/dark app theme, or
+    // Chameleon luma (g_ChameleonLightBg) when BackgroundStyle == 2.
+    // Light background → near-black text; dark background → white text.
+    bool lightBg = false;
+    if (g_Settings.backgroundStyle == 2)
+        lightBg = g_ChameleonLightBg.load();
+    else
+        lightBg = g_Settings.adaptiveTextColor && IsSystemLightTheme();
+    uint8_t fgHi = lightBg ? 0x1A : 0xFF;  // primary fg channel value
     if (titleTb)   titleTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
     if (artistTb)  artistTb.Foreground(MakeBrush(0xB3, fgHi, fgHi, fgHi));
     if (sessTb)    sessTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
@@ -1002,6 +1071,11 @@ static void ApplyStateToWidget(Grid widget) {
             // No session / Libby / app with no thumbnail — collapse and clear.
             artEl.Source(nullptr);
             artEl.Visibility(Visibility::Collapsed);
+            // Chameleon (style=2): clear gradient when no art is present.
+            if (g_Settings.backgroundStyle == 2) {
+                if (auto wRoot = FindByName<Grid>(widget, kWidgetRootName))
+                    wRoot.Background(nullptr);
+            }
         } else {
             // Art available — open stream async and decode into BitmapImage.
             // This coroutine always starts on the UI dispatcher thread (called
@@ -1009,10 +1083,12 @@ static void ApplyStateToWidget(Grid widget) {
             // apartment_aware_awaiter resumes both co_awaits on the same UI
             // thread STA, so BitmapImage (which requires the UI thread) is
             // always created in the correct apartment — no extra RunAsync needed.
-            auto weakArt = make_weak(artEl);
-            auto ref     = thumbnailRef;
-            auto version = thumbnailVersion;
-            [](weak_ref<Image> weakEl, IRandomAccessStreamReference ref,
+            auto weakArt  = make_weak(artEl);
+            auto weakRoot = make_weak(FindByName<Grid>(widget, kWidgetRootName));
+            auto ref      = thumbnailRef;
+            auto version  = thumbnailVersion;
+            [](weak_ref<Image> weakEl, weak_ref<Grid> weakRoot,
+               IRandomAccessStreamReference ref,
                uint32_t version) -> winrt::fire_and_forget {
                 g_AsyncTasks++;
                 struct Guard { ~Guard() { g_AsyncTasks--; } } g;
@@ -1030,8 +1106,70 @@ static void ApplyStateToWidget(Grid widget) {
                     if (!el) co_return;
                     el.Source(bitmap);
                     el.Visibility(Visibility::Visible);
+
+                    // Chameleon (style=2): derive gradient from a second stream read.
+                    if (g_Settings.backgroundStyle == 2) {
+                        try {
+                            auto stream2 = co_await ref.OpenReadAsync();
+                            if (g_Unloading.load()) co_return;
+                            auto decoder = co_await BitmapDecoder::CreateAsync(stream2);
+                            auto softBmp = co_await decoder.GetSoftwareBitmapAsync(
+                                BitmapPixelFormat::Bgra8,
+                                BitmapAlphaMode::Ignore);
+                            auto [c1, c2] = ComputeDominantColors(softBmp);
+
+                            // Compute luma for adaptive text (BT.601).
+                            uint8_t luma = (uint8_t)(0.299f*c1.R + 0.587f*c1.G + 0.114f*c1.B);
+                            g_ChameleonLightBg.store(luma > 128);
+
+                            // Must not touch XAML off the UI thread — we are already
+                            // on the UI STA because all co_awaits above resume there.
+                            if (g_Unloading.load()) co_return;
+                            auto root = weakRoot.get();
+                            if (!root) co_return;
+
+                            LinearGradientBrush grad;
+                            grad.StartPoint({0.0, 0.0});
+                            grad.EndPoint({1.0, 0.0});
+                            GradientStop s1, s2;
+                            s1.Color(c1); s1.Offset(0.0);
+                            s2.Color(c2); s2.Offset(1.0);
+                            grad.GradientStops().Append(s1);
+                            grad.GradientStops().Append(s2);
+                            root.Background(grad);
+                        } WH_CATCH(L"ApplyStateToWidget/ChameleonColors")
+                    }
                 } WH_CATCH(L"ApplyStateToWidget/LoadArt")
-            }(weakArt, ref, version);
+            }(weakArt, weakRoot, ref, version);
+        }
+    }
+
+    // OL-9: apply background brush based on BackgroundStyle setting.
+    // Done after art setup so Chameleon has a chance to set nullptr first;
+    // the fire_and_forget will replace it once pixels are decoded.
+    {
+        auto wRoot = FindByName<Grid>(widget, kWidgetRootName);
+        if (wRoot) {
+            if (g_Settings.backgroundStyle == 0) {
+                // None — transparent.
+                wRoot.Background(nullptr);
+            } else if (g_Settings.backgroundStyle == 1) {
+                // Acrylic — only apply if not already an AcrylicBrush.
+                bool alreadyAcrylic = wRoot.Background().try_as<AcrylicBrush>() != nullptr;
+                if (!alreadyAcrylic) {
+                    try {
+                        AcrylicBrush acrylic;
+                        acrylic.BackgroundSource(AcrylicBackgroundSource::HostBackdrop);
+                        acrylic.TintColor(ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
+                        acrylic.TintOpacity(0.6);
+                        wRoot.Background(acrylic);
+                    } catch (...) {
+                        wRoot.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
+                    }
+                }
+            }
+            // style==2 (Chameleon): initial nullptr was already set in no-art branch
+            // above, or the gradient will arrive from the fire_and_forget.
         }
     }
 
