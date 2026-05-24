@@ -21,6 +21,18 @@ Implemented in `b58aecb` (2026-05-23) as `v0.2.0-beta.1`. All four candidates sh
 
 Pending operator live test + tag + push of `v0.2.0-beta.1`. Phase 3 scope in OL-9.
 
+## ~~SC-UI-3: Title truncation — Grid layout + marquee scroll~~ CLOSED
+
+Shipped 2026-05-23 as `v0.2.0-beta.5`:
+
+- **Grid layout refactor** — replaced horizontal `StackPanel` with a 6-column `Grid`
+  (Auto, Auto, `*`, Auto, Auto, Auto); text column now fills remaining space via star
+  sizing; removed hardcoded `MaxWidth(180)`.
+- **Marquee scroll** — `DispatcherTimer` at 16 ms drives a `TranslateTransform` on the
+  title `TextBlock` inside a `Border(ClipToBounds)`; 2 s start-pause → 40 px/s scroll →
+  1 s end-pause → instant reset; fires only when text overflows the clip container.
+  Gated by `MarqueeTitle` setting (default true). Artist row unchanged (CharacterEllipsis).
+
 ## OL-9: Phase 3 — Background theming
 
 Decided 2026-05-23. Two theming options to be implemented under a single `BackgroundStyle` setting:
@@ -41,7 +53,7 @@ Shipped in `3f2f5a5` (2026-05-22):
 - **2b** Playback rate suffix on artist row (` · 1.5×`) when speed ≠ 1.0
 - **2c** `«` SkipBack / `»` SkipFwd buttons gated on `IsSkipForward/BackwardEnabled`
 
-**Still open (operator action required after live Libby test):**
+**Deferred to post-v1.0.0:**
 - Record Libby's actual AUMID in `HANDOFF-LIBBY-2026-05-22.md`
 - Confirm whether title/artist swap (AlbumTitle as headline) is correct for Libby
 - Confirm Libby's `TimelineProperties` are populated → feeds SC-SP-1 priority

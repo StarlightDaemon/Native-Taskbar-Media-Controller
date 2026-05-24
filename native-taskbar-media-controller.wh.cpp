@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         0.2.0-beta.4
+// @version         0.2.0-beta.5
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -29,7 +29,8 @@ z-ordering, auto-hide support, and DPI handling automatically.
 - **Adaptive text color** — title and artist text adjust to light or dark depending on album art brightness
 - **Double-click to focus** — double-click the widget to bring the source media app to the foreground
 - **Track progress bar** — a slim progress bar at the widget bottom shows playback position
-- **Configurable** — panel width/height, font size, tray gap, fullscreen behavior
+- **Marquee scroll** — long titles smoothly scroll when they overflow the widget; short titles are static
+- **Configurable** — panel width/height, font size, tray gap, fullscreen behavior, marquee on/off
 
 ## Settings
 
