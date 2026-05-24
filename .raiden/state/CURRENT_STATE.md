@@ -19,7 +19,7 @@ Latest release tag: `v0.2.0-beta.6` (2026-05-23)
 - Fullscreen hiding via `SHQueryUserNotificationState` poll thread (1s interval); per-monitor aware
 - Clean unload: widget removed from XAML tree, all event tokens revoked, hook counter drain
 - **Cover art:** square `Image` element, `BitmapImage` loaded via `co_await OpenReadAsync` + `SetSourceAsync`, marshalled back to UI dispatcher; null-thumbnail collapses gracefully
-- **Libby audiobook support:** AlbumTitle/AlbumArtist fallback, playback rate suffix (` · 1.5×`), `«`/`»` skip buttons gated on `IsSkipForward/BackwardEnabled`
+- **Libby audiobook support:** AlbumTitle/AlbumArtist fallback, playback rate suffix (` · 1.5×`), `«`/`»` skip buttons gated on `IsPreviousEnabled`/`IsNextEnabled` (previous/next track or chapter)
 - **Hardening:** `g_GsmtcStartEvent` converted to `std::atomic<HANDLE>` (TOCTOU fix); uninit drain raised to 5 s with timeout warning
 - **SC-CH-1:** `IsTaskbarEffectivelyVisible` — widget hides when taskbar auto-hides to ≤30px strip
 - **SC-UI-2:** Adaptive text color — follows Windows light/dark app theme (`IsSystemLightTheme`); near-black in light mode, white in dark mode; applied to text, buttons, session chip, and progress bar; gated by `AdaptiveTextColor` setting

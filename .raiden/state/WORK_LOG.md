@@ -107,3 +107,12 @@ Matches Windows taskbar button toggle behavior. Sidesteps focus-detection proble
 - **Raiden state updated:** CURRENT_STATE, GOALS, OPEN_LOOPS all populated.
 - **Branch status:** `feature/rename-to-native-controller` is unmerged into `main` locally — wait, actually it WAS merged into main via `--no-ff` merge commit `dc4c0d2`. Both branches are up to date on remote.
 - **PAT policy:** Two PATs were used and revoked by operator within the same session. Token is never committed or stored; remote URL is sanitized after each use.
+
+## [2026-05-23] Session Close — OL-9 Phase 3 Shipped (v0.2.0-beta.6)
+
+- **Objective:** Review open tasks/loops, plan Phase 3 (OL-9), delegate implementation, push release.
+- **Open loop review:** Confirmed OL-9 (Phase 3 — BackgroundStyle setting) as the only active loop. All others closed. Libby verification items deferred to post-v1.0.0.
+- **Handoff authored:** `.raiden/state/HANDOFF-OL9-BACKGROUND-THEMING.md` — self-contained brief for second agent covering Acrylic gate status, BackgroundStyle enum design, Chameleon 64-bucket quantization via `BitmapDecoder`+`SoftwareBitmap`+`IMemoryBufferByteAccess`, `LinearGradientBrush` application, BT.601 luma → `g_ChameleonLightBg` adaptive text, settings-change Option A (live apply in `ApplyStateToWidget`).
+- **Implementation (second agent):** All changes landed in single commit `c8e9353` — BackgroundStyle YAML setting + `ModSettings` field, `ComputeDominantColors()` helper, Chameleon fire_and_forget path, gated Acrylic, no-art transparent fallback, `g_ChameleonLightBg` atomic for text color, `winrt/Windows.Graphics.Imaging.h` + interop header.
+- **Tagged and pushed:** `v0.2.0-beta.6` on `main` — both pushed to remote. PAT used transiently, not stored.
+- **State:** No open loops. Post-v1.0.0 deferred items: Libby AUMID verification, BootLog + verbose log strip.
