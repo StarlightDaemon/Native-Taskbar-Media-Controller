@@ -1,5 +1,29 @@
 # Work Log
 
+## [2026-05-24] v1.0.0 Release — Log Cleanup + Ship
+
+**Objective:** Occam's razor release gate. Strip all remaining verbose trace logs; leave only error and warning paths. Tag and ship v1.0.0.
+
+**Changes:**
+- Stripped 33 verbose `Wh_Log` trace calls across `[pos]`, `[inject]`, `[gsmtc]`, `[init]`, `[coldstart]`, and `[uninit]` contexts
+- Kept 14 log calls: `WH_CATCH` macro (3 lines), injection exceptions (2), GSMTC errors (7), `HookSymbols` failure (1), uninit drain timeout warning (1)
+- Closed OL-10 (marquee scroll live test) as deferred — implementation correct by construction; first post-release session confirms
+- Updated CURRENT_STATE to v1.0.0; updated OPEN_LOOPS to reflect all loops closed
+- Post-v1.0.0 queue: SC-SP-1 (seek bar) → SC-UI-1 (blurred art) → SC-HT-1 (LRC) → SC-GR-1 (FFT)
+
+---
+
+## [2026-05-24] Strip Verbose Scan and Hook Logs
+
+**Objective:** Remove verbose per-call log statements (`[scan]` and `[hook]`) from `GetFrameworkElementFromNative` and `TaskListButton_UpdateVisualStates_Hook` to prevent spamming during taskbar repaints.
+
+**Change:**
+- Deleted diagnostic comments and 8 `Wh_Log` statements with `[scan]` prefix from `GetFrameworkElementFromNative()`.
+- Deleted 4 `Wh_Log` statements with `[hook]` prefix from `TaskListButton_UpdateVisualStates_Hook()`.
+- Verified that all other logs and C++ logic remain intact and untouched.
+
+---
+
 ## [2026-05-23] SC-M-2 Toggle Minimize Confirmed — v0.2.0-beta.4
 
 **Objective:** Add toggle-minimize to SC-M-2 double-tap gesture.
