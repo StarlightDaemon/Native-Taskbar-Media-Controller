@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.2.0
+// @version         1.3.0
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -81,11 +81,12 @@ DPI handling automatically.
   $description: In Acrylic mode, follows the Windows light/dark app theme. In Chameleon mode, follows album art brightness.
 - BackgroundStyle: acrylic
   $name: Theme
-  $description: "None: transparent. Acrylic: frosted-glass blur. Chameleon: gradient derived from album art."
+  $description: "None: transparent. Acrylic: frosted-glass blur. Chameleon: gradient derived from album art. Blurred Art: album art stretched and blurred as the background."
   $options:
   - none: None
   - acrylic: Acrylic
   - chameleon: Chameleon
+  - blurred-art: Blurred Art
 - MarqueeScroll: true
   $name: Scroll long titles
   $description: Marquee-scroll title text that is wider than the available space
@@ -141,6 +142,7 @@ static const PROPERTYKEY kPKEY_AppUserModel_ID = {
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
+#include <winrt/Windows.UI.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Animation.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
@@ -211,9 +213,10 @@ static void LoadSettings() {
     g_Settings.marqueeScroll     = Wh_GetIntSetting(L"MarqueeScroll") != 0;
     {
         auto s = Wh_GetStringSetting(L"BackgroundStyle");
-        if      (wcscmp(s, L"none")      == 0) g_Settings.backgroundStyle = 0;
-        else if (wcscmp(s, L"chameleon") == 0) g_Settings.backgroundStyle = 2;
-        else                                   g_Settings.backgroundStyle = 1; // "acrylic" or unknown
+        if      (wcscmp(s, L"none")        == 0) g_Settings.backgroundStyle = 0;
+        else if (wcscmp(s, L"chameleon")  == 0) g_Settings.backgroundStyle = 2;
+        else if (wcscmp(s, L"blurred-art")== 0) g_Settings.backgroundStyle = 3;
+        else                                     g_Settings.backgroundStyle = 1; // "acrylic" or unknown
         Wh_FreeStringSetting(s);
     }
     if (g_Settings.panelWidth   <= 0) g_Settings.panelWidth = 300;
@@ -397,9 +400,67 @@ static SolidColorBrush MakeBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return SolidColorBrush(ColorHelper::FromArgb(a, r, g, b));
 }
 
+// Returns up to two dominant RGBA colors from album art via 64-bucket quantization.
+// Each RGB channel is reduced to 2 bits (6 bits discarded), giving 4^3 = 64 buckets.
+// Returns {primary, secondary} — secondary equals primary when only one bucket dominates.
+// Pixel format must be Bgra8 (enforced by the caller via GetSoftwareBitmapAsync).
+static std::pair<Windows::UI::Color, Windows::UI::Color>
+ComputeDominantColors(SoftwareBitmap const& bmp) {
+    auto buf  = bmp.LockBuffer(BitmapBufferAccessMode::Read);
+    auto ref  = buf.CreateReference();
+    auto desc = buf.GetPlaneDescription(0);
+
+    // Obtain raw byte pointer via IMemoryBufferByteAccess COM interface.
+    uint32_t capacity = 0;
+    uint8_t const* px = nullptr;
+    {
+        auto byteAccess = ref.as<IMemoryBufferByteAccess>();
+        byteAccess->GetBuffer(const_cast<uint8_t**>(&px), &capacity);
+    }
+    if (!px) return { ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A),
+                     ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A) };
+
+    int stride = desc.Stride;
+    int width  = desc.Width;
+    int height = desc.Height;
+
+    // 64-bucket histogram: bucket = (R>>6)<<4 | (G>>6)<<2 | (B>>6)
+    uint32_t counts[64]{};
+    uint32_t sumR[64]{}, sumG[64]{}, sumB[64]{};
+
+    for (int y = 0; y < height; ++y) {
+        uint8_t const* row = px + y * stride;
+        for (int x = 0; x < width * 4; x += 4) {  // Bgra8: B G R A
+            uint8_t b = row[x], g = row[x+1], r = row[x+2];
+            int bucket = ((r>>6)<<4) | ((g>>6)<<2) | (b>>6);
+            counts[bucket]++;
+            sumR[bucket] += r;
+            sumG[bucket] += g;
+            sumB[bucket] += b;
+        }
+    }
+
+    // Find top two buckets by count.
+    int top1 = 0, top2 = 0;
+    for (int i = 1; i < 64; ++i) {
+        if (counts[i] > counts[top1]) { top2 = top1; top1 = i; }
+        else if (i != top1 && counts[i] > counts[top2]) { top2 = i; }
+    }
+
+    auto avgColor = [&](int bucket) -> Windows::UI::Color {
+        uint32_t c = counts[bucket];
+        if (c == 0) return ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A);
+        return ColorHelper::FromArgb(0xFF,
+            (uint8_t)(sumR[bucket]/c),
+            (uint8_t)(sumG[bucket]/c),
+            (uint8_t)(sumB[bucket]/c));
+    };
+
+    return { avgColor(top1), counts[top2] > 0 ? avgColor(top2) : avgColor(top1) };
+}
+
 // Forward
 static void RefreshWidgetUI();
-static void UpdateWidgetMargin();
 static void StartMarqueeIfNeeded(Canvas titleCanvas, TextBlock titleTb);
 
 // Recompute the widget's right margin from the measured system tray width.
@@ -884,66 +945,27 @@ static Grid BuildWidget() {
             e.Handled(true);
         }));
 
+    // SC-M-3: middle-click closes the active media session.
+    root.PointerPressed(PointerEventHandler(
+        [](IInspectable const&, PointerRoutedEventArgs const& e) {
+            using Windows::UI::Input::PointerUpdateKind;
+            if (e.GetCurrentPoint(nullptr).Properties().PointerUpdateKind()
+                    != PointerUpdateKind::MiddleButtonPressed) return;
+            e.Handled(true);
+            GlobalSystemMediaTransportControlsSession session{ nullptr };
+            {
+                std::lock_guard<std::mutex> g(g_MediaMutex);
+                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount)
+                    session = g_MediaStates[g_ActiveSessionIndex].session;
+            }
+            if (session) {
+                [](GlobalSystemMediaTransportControlsSession s) -> winrt::fire_and_forget {
+                    try { co_await s.TryCloseAsync(); } catch (...) {}
+                }(session);
+            }
+        }));
+
     return root;
-}
-
-// Returns up to two dominant RGBA colors from album art via 64-bucket quantization.
-// Each RGB channel is reduced to 2 bits (6 bits discarded), giving 4^3 = 64 buckets.
-// Returns {primary, secondary} — secondary equals primary when only one bucket dominates.
-// Pixel format must be Bgra8 (enforced by the caller via GetSoftwareBitmapAsync).
-static std::pair<Windows::UI::Color, Windows::UI::Color>
-ComputeDominantColors(SoftwareBitmap const& bmp) {
-    auto buf  = bmp.LockBuffer(BitmapBufferAccessMode::Read);
-    auto ref  = buf.CreateReference();
-    auto desc = buf.GetPlaneDescription(0);
-
-    // Obtain raw byte pointer via IMemoryBufferByteAccess COM interface.
-    uint32_t capacity = 0;
-    uint8_t const* px = nullptr;
-    {
-        auto byteAccess = ref.as<IMemoryBufferByteAccess>();
-        byteAccess->GetBuffer(const_cast<uint8_t**>(&px), &capacity);
-    }
-    if (!px) return { ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A),
-                     ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A) };
-
-    int stride = desc.Stride;
-    int width  = desc.Width;
-    int height = desc.Height;
-
-    // 64-bucket histogram: bucket = (R>>6)<<4 | (G>>6)<<2 | (B>>6)
-    uint32_t counts[64]{};
-    uint32_t sumR[64]{}, sumG[64]{}, sumB[64]{};
-
-    for (int y = 0; y < height; ++y) {
-        uint8_t const* row = px + y * stride;
-        for (int x = 0; x < width * 4; x += 4) {  // Bgra8: B G R A
-            uint8_t b = row[x], g = row[x+1], r = row[x+2];
-            int bucket = ((r>>6)<<4) | ((g>>6)<<2) | (b>>6);
-            counts[bucket]++;
-            sumR[bucket] += r;
-            sumG[bucket] += g;
-            sumB[bucket] += b;
-        }
-    }
-
-    // Find top two buckets by count.
-    int top1 = 0, top2 = 0;
-    for (int i = 1; i < 64; ++i) {
-        if (counts[i] > counts[top1]) { top2 = top1; top1 = i; }
-        else if (i != top1 && counts[i] > counts[top2]) { top2 = i; }
-    }
-
-    auto avgColor = [&](int bucket) -> Windows::UI::Color {
-        uint32_t c = counts[bucket];
-        if (c == 0) return ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A);
-        return ColorHelper::FromArgb(0xFF,
-            (uint8_t)(sumR[bucket]/c),
-            (uint8_t)(sumG[bucket]/c),
-            (uint8_t)(sumB[bucket]/c));
-    };
-
-    return { avgColor(top1), counts[top2] > 0 ? avgColor(top2) : avgColor(top1) };
 }
 
 template <typename T>
@@ -1175,7 +1197,7 @@ static void ApplyStateToWidget(Grid widget) {
             durationMs       = m.durationMs;
             isAudiobook      = m.isAudiobook;
             source           = m.source;
-            hasMedia = (activeIdx >= 0 && activeIdx < count);
+            hasMedia = true;
         }
     }
 
@@ -1201,6 +1223,7 @@ static void ApplyStateToWidget(Grid widget) {
     // SC-GR-2: build the new artist display string for change detection.
     hstring newArtist{ hasMedia ? artistDisplay : std::wstring{} };
 
+    bool handledByFade = false;
     if (titleTb) {
         hstring newTitle{ hasMedia ? title : std::wstring{} };
         bool titleChanged  = (titleTb.Text()  != newTitle);
@@ -1273,14 +1296,13 @@ static void ApplyStateToWidget(Grid widget) {
 
             g_TextFadeStoryboard = fadeOut;
             fadeOut.Begin();
-
-            // Skip bare text writes below — the fade callback handles them.
-            goto skip_text_write; // NOLINT
+            handledByFade = true;
         }
     }
-    // State-only update (play/pause, color, etc.) — write text directly, no animation.
-    if (artistTb && artistTb.Text() != newArtist) artistTb.Text(newArtist);
-    skip_text_write:
+    if (!handledByFade) {
+        // State-only update (play/pause, color, etc.) — write text directly, no animation.
+        if (artistTb && artistTb.Text() != newArtist) artistTb.Text(newArtist);
+    }
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8\uFE0E" : L"\u25B6\uFE0E"}));
 
     // Audiobook mode: relabel artist field for screen readers (author vs. artist).
@@ -1333,8 +1355,8 @@ static void ApplyStateToWidget(Grid widget) {
             // No session / Libby / app with no thumbnail — collapse and clear.
             artEl.Source(nullptr);
             artEl.Visibility(Visibility::Collapsed);
-            // Chameleon (style=2): clear gradient when no art is present.
-            if (g_Settings.backgroundStyle == 2) {
+            // Chameleon (style=2) / Blurred Art (style=3): clear background when no art.
+            if (g_Settings.backgroundStyle == 2 || g_Settings.backgroundStyle == 3) {
                 if (auto wRoot = FindByName<Grid>(widget, kWidgetRootName))
                     wRoot.Background(nullptr);
             }
@@ -1368,6 +1390,25 @@ static void ApplyStateToWidget(Grid widget) {
                     if (!el) co_return;
                     el.Source(bitmap);
                     el.Visibility(Visibility::Visible);
+
+                    // Blurred Art (style=3): decode art at 8px wide — upscale blurs it naturally.
+                    if (g_Settings.backgroundStyle == 3) {
+                        try {
+                            auto stream3 = co_await ref.OpenReadAsync();
+                            if (g_Unloading.load()) co_return;
+                            BitmapImage thumb;
+                            thumb.DecodePixelWidth(8);
+                            thumb.DecodePixelType(DecodePixelType::Logical);
+                            co_await thumb.SetSourceAsync(stream3);
+                            if (g_Unloading.load()) co_return;
+                            auto root = weakRoot.get();
+                            if (!root) co_return;
+                            ImageBrush brush;
+                            brush.ImageSource(thumb);
+                            brush.Stretch(Stretch::UniformToFill);
+                            root.Background(brush);
+                        } WH_CATCH(L"ApplyStateToWidget/BlurredArt")
+                    }
 
                     // Chameleon (style=2): derive gradient from a second stream read.
                     if (g_Settings.backgroundStyle == 2) {
@@ -1428,6 +1469,13 @@ static void ApplyStateToWidget(Grid widget) {
                     } catch (...) {
                         wRoot.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
                     }
+                }
+            } else if (g_Settings.backgroundStyle == 3) {
+                // Blurred Art (style=3): ImageBrush arrives via fire_and_forget.
+                // Pre-clear any non-ImageBrush so stale brushes don't linger.
+                auto cur = wRoot.Background();
+                if (cur && !cur.try_as<ImageBrush>()) {
+                    wRoot.Background(nullptr);
                 }
             } else {
                 // Chameleon (style=2): gradient arrives via fire_and_forget.
@@ -1538,13 +1586,13 @@ static void InjectWidgetInto(Grid rootGrid) {
         g_WidgetRoot   = make_weak(widget);
         g_RootGrid     = make_weak(rootGrid);
         g_SystemTray   = tray ? make_weak(tray) : weak_ref<FrameworkElement>{ nullptr };
-        g_hTaskbarWnd.store(FindWindowW(L"Shell_TrayWnd", nullptr));
         // Detach old tray resize subscription if present.
         if (tray && g_TrayResizeToken.value) {
             try { tray.SizeChanged(g_TrayResizeToken); } catch (...) {}
             g_TrayResizeToken = {};
         }
     }
+    g_hTaskbarWnd.store(FindWindowW(L"Shell_TrayWnd", nullptr));
 
     // Subscribe to tray resize to keep margin accurate when icon count changes.
     if (tray) {
@@ -1620,6 +1668,16 @@ static void RemoveWidget() {
         rootGrid.Dispatcher().RunAsync(
             Windows::UI::Core::CoreDispatcherPriority::Normal,
             [weakGrid]() {
+                StopMarquee();
+                StopProgressTimer();
+                if (g_TextFadeStoryboard) {
+                    try { g_TextFadeStoryboard.Stop(); } catch (...) {}
+                    g_TextFadeStoryboard = nullptr;
+                }
+                if (g_WidgetFadeStoryboard) {
+                    try { g_WidgetFadeStoryboard.Stop(); } catch (...) {}
+                    g_WidgetFadeStoryboard = nullptr;
+                }
                 auto g = weakGrid.get();
                 if (!g) return;
                 auto children = g.Children();
@@ -1746,17 +1804,7 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
                 (durMs > 900'000LL && hasChapterKeyword);
 
     // Build formatted position string: HH:MM:SS when hours present, else MM:SS.
-    std::wstring posFmt;
-    {
-        int64_t secs = posMs / 1000;
-        int h = (int)(secs / 3600);
-        int m = (int)((secs % 3600) / 60);
-        int s = (int)(secs % 60);
-        wchar_t buf[16];
-        if (h > 0) swprintf(buf, 16, L"%d:%02d:%02d", h, m, s);
-        else        swprintf(buf, 16, L"%d:%02d", m, s);
-        posFmt = buf;
-    }
+    std::wstring posFmt = FormatMs(posMs);
 
     {
         std::lock_guard<std::mutex> lk(g_MediaMutex);
@@ -1791,17 +1839,32 @@ static winrt::fire_and_forget UpdateOneSessionAsync(int idx) {
     RefreshWidgetUI();
 }
 
-static void DetachSessionLocked(int idx) {
-    if (idx < 0 || idx >= g_MediaStateCount) return;
+struct SessionCleanupData {
+    GlobalSystemMediaTransportControlsSession session{ nullptr };
+    event_token propsChangedToken{};
+    event_token playbackChangedToken{};
+    event_token timelineChangedToken{};
+};
+
+static SessionCleanupData DetachSessionLocked(int idx) {
+    SessionCleanupData cleanup;
+    if (idx < 0 || idx >= g_MediaStateCount) return cleanup;
     auto& m = g_MediaStates[idx];
-    try {
-        if (m.session) {
-            if (m.propsChangedToken.value)    m.session.MediaPropertiesChanged(m.propsChangedToken);
-            if (m.playbackChangedToken.value) m.session.PlaybackInfoChanged(m.playbackChangedToken);
-            if (m.timelineChangedToken.value) m.session.TimelinePropertiesChanged(m.timelineChangedToken);
-        }
-    } catch (...) {}
+    cleanup.session = m.session;
+    cleanup.propsChangedToken = m.propsChangedToken;
+    cleanup.playbackChangedToken = m.playbackChangedToken;
+    cleanup.timelineChangedToken = m.timelineChangedToken;
     m = MediaState{};
+    return cleanup;
+}
+
+static void PerformSessionCleanup(const SessionCleanupData& cleanup) {
+    if (!cleanup.session) return;
+    try {
+        if (cleanup.propsChangedToken.value)    cleanup.session.MediaPropertiesChanged(cleanup.propsChangedToken);
+        if (cleanup.playbackChangedToken.value) cleanup.session.PlaybackInfoChanged(cleanup.playbackChangedToken);
+        if (cleanup.timelineChangedToken.value) cleanup.session.TimelinePropertiesChanged(cleanup.timelineChangedToken);
+    } catch (...) {}
 }
 
 static void DoEnumerateAndRefresh() {
@@ -1819,10 +1882,15 @@ static void DoEnumerateAndRefresh() {
     }();
     if (!sessions) { Wh_Log(L"[gsmtc] GetSessions failed"); return; }
 
+    SessionCleanupData cleanupList[MAX_SESSIONS];
+    int cleanupCount = 0;
     {
         std::lock_guard<std::mutex> lk(g_MediaMutex);
         if (g_Unloading.load()) return;
-        for (int i = 0; i < g_MediaStateCount; ++i) DetachSessionLocked(i);
+        cleanupCount = g_MediaStateCount;
+        for (int i = 0; i < g_MediaStateCount; ++i) {
+            cleanupList[i] = DetachSessionLocked(i);
+        }
         g_MediaStateCount = 0;
 
         int playingIdx = -1;
@@ -1854,6 +1922,10 @@ static void DoEnumerateAndRefresh() {
             g_MediaStateCount++;
         }
         g_ActiveSessionIndex = (playingIdx >= 0) ? playingIdx : 0;
+    }
+
+    for (int i = 0; i < cleanupCount; ++i) {
+        PerformSessionCleanup(cleanupList[i]);
     }
 
     int n;
@@ -2157,10 +2229,6 @@ BOOL Wh_ModInit() {
 void Wh_ModUninit() {
     g_Unloading = true;
 
-    // SC-HT-4: stop the progress interpolation timer before tearing down.
-    StopProgressTimer();
-    StopMarquee();
-
     if (g_PollStop) SetEvent(g_PollStop);
     if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
     if (g_GsmtcThreadId) PostThreadMessageW(g_GsmtcThreadId, WM_QUIT, 0, 0);
@@ -2178,20 +2246,35 @@ void Wh_ModUninit() {
     if (g_PollStop) { CloseHandle(g_PollStop); g_PollStop = nullptr; }
     if (HANDLE ev = g_GsmtcStartEvent.exchange(nullptr)) CloseHandle(ev);
 
+    SessionCleanupData cleanupList[MAX_SESSIONS];
+    int cleanupCount = 0;
+    GlobalSystemMediaTransportControlsSessionManager mgr{ nullptr };
+    event_token mgrToken{};
     {
         std::lock_guard<std::mutex> g(g_MediaMutex);
         if (g_PendingRequest) {
             try { g_PendingRequest.Cancel(); } catch (...) {}
         }
-        try {
-            if (g_SessionManager && g_SessionsChangedToken.value) {
-                g_SessionManager.SessionsChanged(g_SessionsChangedToken);
-                g_SessionsChangedToken = {};
-            }
-        } catch (...) {}
-        for (int i = 0; i < g_MediaStateCount; ++i) DetachSessionLocked(i);
-        g_MediaStateCount = 0;
+        mgr = g_SessionManager;
+        mgrToken = g_SessionsChangedToken;
+        g_SessionsChangedToken = {};
         g_SessionManager = nullptr;
+        
+        cleanupCount = g_MediaStateCount;
+        for (int i = 0; i < g_MediaStateCount; ++i) {
+            cleanupList[i] = DetachSessionLocked(i);
+        }
+        g_MediaStateCount = 0;
+    }
+
+    try {
+        if (mgr && mgrToken.value) {
+            mgr.SessionsChanged(mgrToken);
+        }
+    } catch (...) {}
+
+    for (int i = 0; i < cleanupCount; ++i) {
+        PerformSessionCleanup(cleanupList[i]);
     }
 
     RemoveWidget();
