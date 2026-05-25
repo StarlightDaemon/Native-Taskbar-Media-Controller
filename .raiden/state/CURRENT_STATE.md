@@ -1,14 +1,14 @@
 # Current State
 
-## v1.2.0 — Uncommitted (2026-05-24)
+## v1.3.0 — Committed (2026-05-24)
 
 File: `native-taskbar-media-controller.wh.cpp`  
-Version: `1.1.0`  
+Version: `1.3.0`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
-Latest release tag: `v1.1.0` (2026-05-24)
+Latest release tag: `v1.1.0` (2026-05-24) — v1.2.0 and v1.3.0 pending push
 
 **Branch state:**
-- `main` — v1.2.0 uncommitted; v1.1.0 is latest pushed tag
+- `main` — v1.3.0 committed; v1.2.0 + v1.3.0 tags local only, not pushed
 
 **What works:**
 - Native XAML injection into `Grid#RootGrid` under `Taskbar.TaskbarFrame` (no overlay window)
@@ -46,14 +46,23 @@ Latest release tag: `v1.1.0` (2026-05-24)
 - **SC-SP-4 — Widget fade in/out:** `SetWidgetVisible(UIElement, bool)` helper; 0.2 s `DoubleAnimation` on `Opacity`; fade-in sets `Opacity(0)` + `Visibility::Visible` before animating to prevent flash; fade-out defers `Visibility::Collapsed` to `Completed` callback; `g_WidgetFadeStoryboard` global
 - **SC-HT-4 — Smooth progress interpolation:** `DispatcherTimer` at 500 ms (`g_ProgressTimer`); each tick reads session state under `g_MediaMutex`, advances display position by `GetTickCount64()` elapsed time, updates fill width + timestamp text; stops itself when paused; cleaned up in `Wh_ModUninit`
 
-**Post-v1.2.0 candidates (ordered by value):**
+**v1.2.0 — Polish pass (2026-05-24):**
+- **SC-GR-2 — Text crossfade:** 0.15 s opacity fade-out → text swap → fade-in on track change; play/pause and state-only updates bypass animation entirely
+- **SC-SP-4 — Widget fade in/out:** `SetWidgetVisible()` helper; 0.2 s opacity fade; guards prevent re-trigger when already in target state
+- **SC-HT-4 — Smooth progress interpolation:** `DispatcherTimer` at 500 ms advances display position via `GetTickCount64()` elapsed time between SMTC events
+
+**v1.3.0 — Blurred Art, middle-click close, stability hardening (2026-05-24):**
+- **SC-UI-1 — Blurred Art:** `BackgroundStyle = blurred-art`; album art decoded at `DecodePixelWidth(8)`, upscale blurs naturally; `ImageBrush(Stretch::UniformToFill)` on widget root; clears when no art
+- **SC-M-3 — Middle-click to close:** `PointerPressed` + `PointerUpdateKind::MiddleButtonPressed` → `TryCloseAsync()` on active session
+- **Structural fixes:** `goto` replaced with `handledByFade` flag; `FormatMs` deduplication; `FindWindowW` moved outside mutex; `ComputeDominantColors` relocated
+- **Threading fixes:** `DetachSessionLocked` refactored — COM revocations deferred out of `g_MediaMutex`; all XAML stops consolidated into `RemoveWidget`'s `RunAsync` lambda (fixes STA threading contract violation)
+
+**Post-v1.3.0 candidates (ordered by value):**
 1. ~~SC-SP-1 — Interactive seek bar~~ **NOT WANTED — will not be implemented.** Explicitly out of scope; do not revisit.
 2. ~~SC-0X-1 — Display-only mode~~ **NOT WANTED — will not be implemented.**
-3. SC-UI-1 — Blurred album art background (`BackgroundStyle = 3`; downscale-trick via `DecodePixelWidth(8)` → `ImageBrush(Stretch::UniformToFill)`; ~60 lines; Composition GaussianBlur is higher quality but requires compositor access probe first)
-4. SC-M-3 — Middle-click to close session (`TryCloseAsync()` on active session via `PointerPressed` + middle-button check; ~20 lines)
-5. SC-FLY-1 — Hover flyout panel (XAML `Popup` anchored to widget, shows on `PointerEntered`/`PointerExited`; renders full metadata — large art, untruncated title/artist, duration, playback speed, chapter info; gate: positioning probe needed to confirm popup escapes taskbar bounds upward in injected XAML island; lyrics pane is separable additive scope via SC-HT-1)
-6. SC-HT-1 — LRC lyrics overlay (significant scope increase; natural fit as flyout content tier 2 after SC-FLY-1)
-7. SC-GR-1 — FFT audio visualizer (process compatibility audit required)
+3. SC-FLY-1 — Hover flyout panel (XAML `Popup` anchored to widget, shows on `PointerEntered`/`PointerExited`; renders full metadata — large art, untruncated title/artist, duration, playback speed, chapter info; gate: positioning probe needed to confirm popup escapes taskbar bounds upward in injected XAML island; lyrics pane is separable additive scope via SC-HT-1)
+4. SC-HT-1 — LRC lyrics overlay (significant scope increase; natural fit as flyout content tier 2 after SC-FLY-1)
+5. SC-GR-1 — FFT audio visualizer (process compatibility audit required)
 
 **v1.5 / post-release maybe:**
 - **Chrome Extension companion** — A Chrome extension + Native Messaging host that relays richer Media Session state (chapter metadata, `setPositionState` data Libby doesn't push to SMTC) to the mod via named pipe or shared memory. Motivation: Libby is a Chrome PWA; its SMTC ceiling is whatever it publishes via `navigator.mediaSession`, and it doesn't call `setPositionState()`. A companion extension is the only clean path past that ceiling. Scope: extension + native host exe + IPC layer in mod — three moving parts, non-trivial install story. Revisit only after core mod is stable at v1.x.
