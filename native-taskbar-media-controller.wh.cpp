@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.1.0
+// @version         1.2.0
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -297,10 +297,14 @@ static std::atomic<int> g_HookCallCounter{ 0 };
 static std::atomic<bool> g_Unloading{ false };
 static std::atomic<bool> g_ChameleonLightBg{ false };  // set by art loader; read in ApplyStateToWidget
 static Storyboard           g_MarqueeStoryboard{ nullptr };
+static Storyboard           g_TextFadeStoryboard{ nullptr };
+static Storyboard           g_WidgetFadeStoryboard{ nullptr };
 static winrt::event_token   g_TitleSizeChangedToken{};
 static HANDLE g_PollThread = nullptr;
 static HANDLE g_PollStop = nullptr;
 static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
+static DispatcherTimer      g_ProgressTimer{ nullptr };
+static ULONGLONG            g_ProgressLastTickMs = 0;
 
 // ---------- Helpers ----------
 // Cached vtable slot index — avoids rescanning every hook call once found.
@@ -985,6 +989,105 @@ static void StopMarquee() {
     }
 }
 
+// SC-HT-4: stop the interpolation timer (safe to call when already null).
+static void StopProgressTimer() {
+    if (g_ProgressTimer) {
+        try { g_ProgressTimer.Stop(); } catch (...) {}
+        g_ProgressTimer = nullptr;
+    }
+}
+
+// SC-HT-4: start a 500ms DispatcherTimer that advances the displayed
+// progress fill by elapsed wall-time between SMTC updates.
+static void StartProgressTimer(Grid widget) {
+    StopProgressTimer();
+    auto weakWidget = make_weak(widget);
+    DispatcherTimer timer;
+    timer.Interval(MakeTimeSpan(0.5));
+    timer.Tick([weakWidget](IInspectable const&, IInspectable const&) {
+        // Read session state under mutex — brief critical section.
+        int64_t posMs = 0, durMs = 0;
+        bool playing = false;
+        {
+            std::lock_guard<std::mutex> lk(g_MediaMutex);
+            int idx = g_ActiveSessionIndex;
+            if (idx >= 0 && idx < g_MediaStateCount) {
+                posMs   = g_MediaStates[idx].positionMs;
+                durMs   = g_MediaStates[idx].durationMs;
+                playing = g_MediaStates[idx].isPlaying;
+            }
+        }
+        if (!playing || durMs <= 0) {
+            StopProgressTimer();
+            return;
+        }
+        ULONGLONG now     = GetTickCount64();
+        ULONGLONG elapsed = now - g_ProgressLastTickMs;
+        g_ProgressLastTickMs = now;
+        int64_t displayPos = std::min(posMs + (int64_t)elapsed, durMs);
+
+        auto w = weakWidget.get();
+        if (!w) { StopProgressTimer(); return; }
+
+        // Update fill width
+        if (auto track = FindByName<Grid>(w, kProgressTrackName)) {
+            if (auto fill = FindByName<Shapes::Rectangle>(track, kProgressFillName)) {
+                double ratio = std::clamp(displayPos / (double)durMs, 0.0, 1.0);
+                fill.Width(ratio * track.ActualWidth());
+            }
+        }
+        // Update timestamp
+        if (auto tsTb = FindByName<TextBlock>(w, kTimestampName)) {
+            if (tsTb.Visibility() == Visibility::Visible) {
+                bool hasHours = durMs >= 3'600'000LL;
+                tsTb.Text(FormatMs(displayPos, hasHours) + L" / " + FormatMs(durMs));
+            }
+        }
+    });
+    g_ProgressTimer = timer;
+    timer.Start();
+}
+
+// SC-SP-4: fade the widget in (visible=true) or out (visible=false) over 0.2s.
+// Must only be called from the XAML dispatcher thread.
+static void SetWidgetVisible(UIElement el, bool visible) {
+    bool currentlyVisible = (el.Visibility() == Visibility::Visible);
+    // No-op when already in the target stable state with no transition in flight.
+    if ( visible && currentlyVisible && !g_WidgetFadeStoryboard) return;
+    if (!visible && !currentlyVisible)                            return;
+
+    if (g_WidgetFadeStoryboard) {
+        try { g_WidgetFadeStoryboard.Stop(); } catch (...) {}
+        g_WidgetFadeStoryboard = nullptr;
+    }
+
+    DoubleAnimation anim;
+    anim.From(visible ? 0.0 : 1.0);
+    anim.To  (visible ? 1.0 : 0.0);
+    anim.Duration(DurationHelper::FromTimeSpan(MakeTimeSpan(0.2)));
+    anim.EnableDependentAnimation(true);
+
+    Storyboard sb;
+    Storyboard::SetTarget(anim, el);
+    Storyboard::SetTargetProperty(anim, L"Opacity");
+    sb.Children().Append(anim);
+
+    if (visible) {
+        el.Opacity(0.0);
+        el.Visibility(Visibility::Visible);
+    }
+
+    if (!visible) {
+        auto weakEl = make_weak(el);
+        sb.Completed([weakEl](IInspectable const&, IInspectable const&) {
+            if (auto e = weakEl.get()) e.Visibility(Visibility::Collapsed);
+        });
+    }
+
+    g_WidgetFadeStoryboard = sb;
+    sb.Begin();
+}
+
 static void StartMarqueeIfNeeded(Canvas titleCanvas, TextBlock titleTb) {
     StopMarquee();
 
@@ -1095,22 +1198,89 @@ static void ApplyStateToWidget(Grid widget) {
     auto skipBackBtn= FindByName<Button>(widget, kSkipBackName);
     auto artEl      = FindByName<Image>(widget, kAlbumArtName);
 
+    // SC-GR-2: build the new artist display string for change detection.
+    hstring newArtist{ hasMedia ? artistDisplay : std::wstring{} };
+
     if (titleTb) {
         hstring newTitle{ hasMedia ? title : std::wstring{} };
-        if (titleTb.Text() != newTitle) {
-            // Only reset scroll when the text actually changes (new track).
-            // Play/pause and other state updates leave the animation running.
-            StopMarquee();
-            if (auto scroller = FindByName<StackPanel>(widget, kTitleScrollerName))
-                if (auto tt = scroller.RenderTransform().try_as<TranslateTransform>())
-                    tt.X(0.0);
-            titleTb.Text(newTitle);
-            if (titleTb2) titleTb2.Text(newTitle);
-            // SizeChanged fires after layout → StartMarqueeIfNeeded
+        bool titleChanged  = (titleTb.Text()  != newTitle);
+        bool artistChanged = (artistTb && artistTb.Text() != newArtist);
+        if (titleChanged || artistChanged) {
+            // Track changed — crossfade: fade out, swap text, fade back in.
+            // Only reset scroll on a track change.
+            if (titleChanged) {
+                StopMarquee();
+                if (auto scroller = FindByName<StackPanel>(widget, kTitleScrollerName))
+                    if (auto tt = scroller.RenderTransform().try_as<TranslateTransform>())
+                        tt.X(0.0);
+            }
+
+            // Stop any running text fade storyboard.
+            if (g_TextFadeStoryboard) {
+                try { g_TextFadeStoryboard.Stop(); } catch (...) {}
+                g_TextFadeStoryboard = nullptr;
+            }
+
+            // Build the scroller panel element (parent of title1+title2) for fade target.
+            auto titleScroller = FindByName<StackPanel>(widget, kTitleScrollerName);
+
+            // Fade-out storyboard (0.15 s).
+            Storyboard fadeOut;
+            auto addFade = [&](UIElement target, double from, double to) {
+                DoubleAnimation a;
+                a.From(from); a.To(to);
+                a.Duration(DurationHelper::FromTimeSpan(MakeTimeSpan(0.15)));
+                a.EnableDependentAnimation(true);
+                Storyboard::SetTarget(a, target);
+                Storyboard::SetTargetProperty(a, L"Opacity");
+                fadeOut.Children().Append(a);
+            };
+            if (titleScroller) addFade(titleScroller, 1.0, 0.0);
+            if (artistTb)      addFade(artistTb,      1.0, 0.0);
+
+            // Capture everything the Completed lambda needs as weak refs / values.
+            auto weakTitle1   = make_weak(titleTb);
+            auto weakTitle2   = make_weak(titleTb2);
+            auto weakArtistTb = make_weak(artistTb);
+            auto weakScroller = titleScroller ? make_weak(titleScroller)
+                                             : weak_ref<StackPanel>{ nullptr };
+            hstring capturedTitle  = newTitle;
+            hstring capturedArtist = newArtist;
+
+            fadeOut.Completed([weakTitle1, weakTitle2, weakArtistTb, weakScroller,
+                               capturedTitle, capturedArtist]
+                              (IInspectable const&, IInspectable const&) {
+                // Swap text while invisible.
+                if (auto t1 = weakTitle1.get())   t1.Text(capturedTitle);
+                if (auto t2 = weakTitle2.get())   t2.Text(capturedTitle);
+                if (auto at = weakArtistTb.get()) at.Text(capturedArtist);
+
+                // Fade-in storyboard (0.15 s).
+                Storyboard fadeIn;
+                auto addIn = [&](UIElement target) {
+                    DoubleAnimation a;
+                    a.From(0.0); a.To(1.0);
+                    a.Duration(DurationHelper::FromTimeSpan(MakeTimeSpan(0.15)));
+                    a.EnableDependentAnimation(true);
+                    Storyboard::SetTarget(a, target);
+                    Storyboard::SetTargetProperty(a, L"Opacity");
+                    fadeIn.Children().Append(a);
+                };
+                if (auto sc = weakScroller.get()) addIn(sc);
+                if (auto at = weakArtistTb.get()) addIn(at);
+                fadeIn.Begin();
+            });
+
+            g_TextFadeStoryboard = fadeOut;
+            fadeOut.Begin();
+
+            // Skip bare text writes below — the fade callback handles them.
+            goto skip_text_write; // NOLINT
         }
     }
-
-    if (artistTb) artistTb.Text(hasMedia ? artistDisplay : L"");
+    // State-only update (play/pause, color, etc.) — write text directly, no animation.
+    if (artistTb && artistTb.Text() != newArtist) artistTb.Text(newArtist);
+    skip_text_write:
     if (playBtn)  playBtn.Content(box_value(hstring{isPlaying ? L"\u23F8\uFE0E" : L"\u25B6\uFE0E"}));
 
     // Audiobook mode: relabel artist field for screen readers (author vs. artist).
@@ -1295,7 +1465,21 @@ static void ApplyStateToWidget(Grid widget) {
         }
     }
 
-    widget.Visibility(hasMedia ? Visibility::Visible : Visibility::Collapsed);
+    // SC-HT-4: manage the interpolation timer based on playback state.
+    // Only (re)start when not already running — avoids tearing it down on every
+    // state update (play/pause toggle, color change, etc.) and resetting the
+    // elapsed-time baseline unnecessarily.
+    if (isPlaying && durationMs > 0) {
+        if (!g_ProgressTimer) {
+            g_ProgressLastTickMs = GetTickCount64();
+            StartProgressTimer(widget);
+        }
+    } else {
+        StopProgressTimer();
+    }
+
+    // SC-SP-4: fade widget in or out instead of snapping visibility.
+    SetWidgetVisible(widget, hasMedia);
 }
 
 static void RefreshWidgetUI() {
@@ -1828,7 +2012,8 @@ static DWORD WINAPI FullscreenPollThread(LPVOID) {
                 [weak, hide]() {
                     if (auto w = weak.get()) {
                         if (hide) {
-                            w.Visibility(Visibility::Collapsed);
+                            // SC-SP-4: fade out instead of snap-collapse.
+                            SetWidgetVisible(w, false);
                         } else {
                             ApplyStateToWidget(w);
                         }
@@ -1971,6 +2156,10 @@ BOOL Wh_ModInit() {
 
 void Wh_ModUninit() {
     g_Unloading = true;
+
+    // SC-HT-4: stop the progress interpolation timer before tearing down.
+    StopProgressTimer();
+    StopMarquee();
 
     if (g_PollStop) SetEvent(g_PollStop);
     if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
