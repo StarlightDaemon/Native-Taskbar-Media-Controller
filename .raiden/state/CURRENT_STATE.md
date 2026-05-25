@@ -48,10 +48,12 @@ Latest release tag: `v1.1.0` (2026-05-24)
 
 **Post-v1.2.0 candidates (ordered by value):**
 1. ~~SC-SP-1 — Interactive seek bar~~ **NOT WANTED — will not be implemented.** Explicitly out of scope; do not revisit.
-2. SC-UI-1 — Blurred album art background (rendering pipeline review needed; downscale-trick via `DecodePixelWidth(8)` → `ImageBrush` is the low-scope path; Composition GaussianBlur is higher quality but requires compositor access probe)
-3. SC-FLY-1 — Hover flyout panel (XAML `Popup` anchored to widget, shows on `PointerEntered`/`PointerExited`; renders full metadata — large art, untruncated title/artist, duration, playback speed, chapter info; gate: positioning probe needed to confirm popup escapes taskbar bounds upward in injected XAML island; lyrics pane is separable additive scope via SC-HT-1)
-4. SC-HT-1 — LRC lyrics overlay (significant scope increase; natural fit as flyout content tier 2 after SC-FLY-1)
-5. SC-GR-1 — FFT audio visualizer (process compatibility audit required)
+2. ~~SC-0X-1 — Display-only mode~~ **NOT WANTED — will not be implemented.**
+3. SC-UI-1 — Blurred album art background (`BackgroundStyle = 3`; downscale-trick via `DecodePixelWidth(8)` → `ImageBrush(Stretch::UniformToFill)`; ~60 lines; Composition GaussianBlur is higher quality but requires compositor access probe first)
+4. SC-M-3 — Middle-click to close session (`TryCloseAsync()` on active session via `PointerPressed` + middle-button check; ~20 lines)
+5. SC-FLY-1 — Hover flyout panel (XAML `Popup` anchored to widget, shows on `PointerEntered`/`PointerExited`; renders full metadata — large art, untruncated title/artist, duration, playback speed, chapter info; gate: positioning probe needed to confirm popup escapes taskbar bounds upward in injected XAML island; lyrics pane is separable additive scope via SC-HT-1)
+6. SC-HT-1 — LRC lyrics overlay (significant scope increase; natural fit as flyout content tier 2 after SC-FLY-1)
+7. SC-GR-1 — FFT audio visualizer (process compatibility audit required)
 
 **v1.5 / post-release maybe:**
 - **Chrome Extension companion** — A Chrome extension + Native Messaging host that relays richer Media Session state (chapter metadata, `setPositionState` data Libby doesn't push to SMTC) to the mod via named pipe or shared memory. Motivation: Libby is a Chrome PWA; its SMTC ceiling is whatever it publishes via `navigator.mediaSession`, and it doesn't call `setPositionState()`. A companion extension is the only clean path past that ceiling. Scope: extension + native host exe + IPC layer in mod — three moving parts, non-trivial install story. Revisit only after core mod is stable at v1.x.
