@@ -2,14 +2,15 @@
 
 > A [Windhawk](https://windhawk.net) mod that injects a native media controller directly into the Windows 11 taskbar.
 
-**Status: v1.0.1**
+**Status: v1.1.0**
 
 Unlike overlay-based taskbar media mods, this one inserts the widget as a real child element of the taskbar's own XAML tree (`Grid#RootGrid` under `Taskbar.TaskbarFrame`). There is no separate window, no `SetLayeredWindowAttributes`, no GDI painting loop. The widget inherits correct z-ordering, auto-hide handling, and DPI scaling from the taskbar itself.
 
 ## Features
 
 - **Now playing** — title and artist from any GSMTC-compatible source: Spotify, YouTube Music, Windows Media Player, browsers, audiobook apps, and anything else that registers a media session
-- **Playback controls** — play/pause toggle, skip-next, and skip-back; skip-back is hidden for sources that don't support it
+- **Playback controls** — play/pause toggle, skip-next, and skip-back; skip buttons are always shown but dimmed when not supported by the source
+- **Scrolling title** — long titles scroll with a seamless marquee ticker; can be disabled in settings
 - **Multi-session** — when multiple media apps are active simultaneously, a session count chip appears; tap it to cycle through sessions
 - **Album art** — cover art displayed inline; collapses gracefully when unavailable
 - **Track progress bar** — slim bar at the widget bottom with a position/duration timestamp; hidden automatically when the source doesn't expose timeline data
@@ -51,6 +52,7 @@ Unlike overlay-based taskbar media mods, this one inserts the widget as a real c
 | Show track progress bar and timestamp | true | Enables the slim progress bar and position/duration display; hidden automatically when the source doesn't expose timeline data |
 | Adaptive text color | true | In Acrylic mode, follows the Windows light/dark theme; in Chameleon mode, follows album art brightness |
 | Theme | Acrylic | None (transparent), Acrylic (frosted-glass blur), or Chameleon (gradient from album art) |
+| Scrolling title | true | Enables the marquee ticker for titles that overflow the widget width |
 
 ## Roadmap
 
@@ -59,6 +61,7 @@ For the full analysis of feature candidates across 11 community forks, see [`for
 ### Under consideration
 
 - Blurred album art background (SC-UI-1)
+- Hover flyout panel — expanded metadata and art on mouse-over (SC-FLY-1)
 - Synchronized LRC lyrics (SC-HT-1)
 - FFT audio visualizer (SC-GR-1)
 

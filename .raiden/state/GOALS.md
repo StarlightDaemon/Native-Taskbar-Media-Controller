@@ -9,26 +9,26 @@ Build a native XAML-injected Windhawk mod that adds a media controller to the Wi
 | Phase | Status | Branch |
 |---|---|---|
 | Phase 0: Fork review + synthesis | Complete | main |
-| Phase 1: XAML skeleton + GSMTC | Complete | feature/rename-to-native-controller |
-| Phase 2: Feature additions | Not started | — |
+| Phase 1: XAML skeleton + GSMTC | Complete | main (merged from feature/rename-to-native-controller) |
+| Phase 2: Feature additions | Complete | main |
+| Phase 3: Background theming | Complete | main |
+| Post-release: v1.0.x–v1.1.0 | Complete | main — latest tag v1.1.0 |
 
-## Phase 2 Candidates (from synthesis-2026-05-19.md)
+## Post-v1.1.0 Candidates
 
-Operator decision required on prioritization. Top candidates by synthesis rating:
+See `CURRENT_STATE.md` for the live ordered candidate list. Full synthesis at `fork-reports/synthesis-2026-05-19.md`.
 
-**Recommended (MULTI-UNIT-INTEGRATION):**
-- ~~SC-SP-1: Seek bar (memeri121)~~ — **NOT WANTED. Will not be implemented.**
+**Shipped from synthesis:**
+- ~~SC-SP-1: Seek bar~~ — NOT WANTED
+- ✓ SC-CH-1: IsTaskbarEffectivelyVisible (Chaython)
+- ✓ SC-KV-2: Monitor-coverage fullscreen detection (kevinoe)
+- ✓ SC-UI-2: Adaptive text color (Uiisland)
+- ✓ SC-HT-2: 64-bucket color quantization (HibritTofas) — used for Chameleon
+- ✓ SC-M-2: BringSourceAppToFront (Messij)
+- ✓ SC-KV-4: Track progress bar (kevinoe)
+- ✓ SC-M-1: Multi-session array (Messij)
+
+**Remaining from synthesis (not yet implemented):**
+- SC-UI-1: Blurred album art background — GDI+/ULW conflict N/A in XAML; downscale-trick path viable
 - SC-HT-1: LRC lyrics (HibritTofas)
 - SC-GR-1: FFT audio visualizer (GR0UD) — requires process compatibility audit first
-
-**Recommended (TARGETED-PORT):**
-- SC-CH-1: IsTaskbarEffectivelyVisible auto-hide fix (Chaython)
-- SC-KV-2: Monitor-coverage fullscreen detection (kevinoe)
-- SC-UI-1: Blurred album art background (Uiisland) — rendering pipeline conflict with ULW
-- SC-HT-2: GetAlbumPalette color quantization (HibritTofas)
-- SC-M-2: BringSourceAppToFront (Messij)
-
-**Mechanical (low complexity):**
-- SC-UI-2: Adaptive text color from luminance (Uiisland)
-- SC-SP-5: CS_DBLCLKS window class style — N/A (no Win32 window in this architecture)
-- SC-KV-5: UpdateOneSession returning bool changed
