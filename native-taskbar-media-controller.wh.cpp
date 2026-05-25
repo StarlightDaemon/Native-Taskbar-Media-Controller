@@ -2,11 +2,11 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.3.0
+// @version         1.4.4
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -lgdi32 -ldwmapi -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -97,6 +97,7 @@ DPI handling automatically.
 #include <windhawk_utils.h>
 
 #include <windows.h>
+#include <dwmapi.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <propsys.h>
@@ -107,7 +108,7 @@ struct IMemoryBufferByteAccess : IUnknown {
     virtual HRESULT STDMETHODCALLTYPE GetBuffer(uint8_t** value, uint32_t* capacity) = 0;
 };
 static constexpr GUID IMemoryBufferByteAccess_iid{
-    0x5b0d3235,0x4dba,0x4d44,{0x86,0x5e,0x8f,0x1d,0x0e,0xf4,0xf5,0xe0}
+    0x5b0d3235,0x4dba,0x4d44,{0x86,0x5e,0x8f,0x1d,0x0e,0xf4,0xf6,0xe5}
 };
 template<> constexpr const GUID& __mingw_uuidof<IMemoryBufferByteAccess>()  { return IMemoryBufferByteAccess_iid; }
 template<> constexpr const GUID& __mingw_uuidof<IMemoryBufferByteAccess*>() { return IMemoryBufferByteAccess_iid; }
@@ -309,6 +310,36 @@ static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
 static DispatcherTimer      g_ProgressTimer{ nullptr };
 static ULONGLONG            g_ProgressLastTickMs = 0;
 
+// ---------- SC-FLY-1: flyout HWND (Win32 WS_POPUP on dedicated thread) ----------
+// WUX Popup is non-functional in the taskbar XAML Island (probe confirmed: IsOpen=true
+// fires but the compositor target has no visible output). A separate Win32 window is used.
+
+#define WM_FLYOUT_SHOW         (WM_APP + 20)  // show and position above widget
+#define WM_FLYOUT_HIDE_DELAYED (WM_APP + 21)  // start 300ms hide timer
+#define WM_FLYOUT_HIDE_NOW     (WM_APP + 22)  // cancel timer, hide immediately
+#define WM_FLYOUT_UPDATE       (WM_APP + 23)  // invalidate content (title/artist changed)
+#define WM_FLYOUT_QUIT         (WM_APP + 24)  // destroy HWND and exit thread message loop
+
+static HWND   g_FlyoutHwnd     = nullptr;
+static HANDLE g_FlyoutThread   = nullptr;
+static DWORD  g_FlyoutThreadId = 0;
+
+// Flyout content strings — written on the XAML UI thread, read on the flyout thread.
+static std::mutex   g_FlyoutContentMutex;
+static std::wstring g_FlyoutTitleStr;
+static std::wstring g_FlyoutArtistStr;
+
+// Flyout album art — decoded to HBITMAP once per track on the XAML thread,
+// drawn via StretchBlt on the flyout thread. Mutex prevents torn reads/writes.
+static std::mutex g_FlyoutArtMutex;
+static HBITMAP    g_FlyoutArtHBitmap = nullptr;
+static int        g_FlyoutArtBmpW    = 0;
+static int        g_FlyoutArtBmpH    = 0;
+
+// Widget right-margin (trayWidth + offsetX, in DIPs) — updated in UpdateWidgetMargin.
+// Flyout thread reads this to compute its screen position.
+static std::atomic<int> g_FlyoutMarginDIPs{ 0 };
+
 // ---------- Helpers ----------
 // Cached vtable slot index — avoids rescanning every hook call once found.
 static std::atomic<int> g_FrameworkElementSlot{ -1 };
@@ -479,6 +510,7 @@ static void UpdateWidgetMargin() {
     double gap       = (double)g_Settings.offsetX;
     double margin    = trayWidth + gap;
     widget.Margin(ThicknessHelper::FromLengths(0, 0, margin, 0));
+    g_FlyoutMarginDIPs.store((int)margin);
 }
 
 // ---------- SC-M-2: BringSourceAppToFront — Messij ----------
@@ -655,6 +687,165 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
     } else {
         ShowWindow(ctx.best, SW_MINIMIZE);
     }
+}
+
+// ---------- SC-FLY-1: flyout Win32 window ----------
+
+static constexpr int kFlyoutHDIPs  = 80;  // flyout panel height in DIPs
+static constexpr int kFlyoutPadDIPs = 8;
+
+static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE: {
+        // Windows 11 small rounded corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUNDSMALL = 3)
+        DWORD corner = 3;
+        DwmSetWindowAttribute(hwnd, 33, &corner, sizeof(corner));
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;  // suppress flicker; WM_PAINT fills everything
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc; GetClientRect(hwnd, &rc);
+        int W = rc.right, H = rc.bottom;
+
+        // Dark background
+        HBRUSH bgBrush = CreateSolidBrush(RGB(20, 20, 32));
+        FillRect(hdc, &rc, bgBrush);
+        DeleteObject(bgBrush);
+
+        // Read title and artist under lock
+        std::wstring title, artist;
+        {
+            std::lock_guard<std::mutex> lk(g_FlyoutContentMutex);
+            title  = g_FlyoutTitleStr;
+            artist = g_FlyoutArtistStr;
+        }
+
+        int logPx  = GetDeviceCaps(hdc, LOGPIXELSY);
+        int pad    = MulDiv(kFlyoutPadDIPs, logPx, 96);
+        int artSz  = H - 2 * pad;  // square size: full height minus top+bottom padding
+        SetBkMode(hdc, TRANSPARENT);
+
+        // Album art — StretchBlt with HALFTONE for quality downscaling
+        int textLeft = pad;
+        {
+            std::lock_guard<std::mutex> lk(g_FlyoutArtMutex);
+            if (g_FlyoutArtHBitmap) {
+                HDC memDC = CreateCompatibleDC(hdc);
+                HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, g_FlyoutArtHBitmap);
+                SetStretchBltMode(hdc, HALFTONE);
+                SetBrushOrgEx(hdc, 0, 0, nullptr);
+                StretchBlt(hdc, pad, pad, artSz, artSz,
+                           memDC, 0, 0, g_FlyoutArtBmpW, g_FlyoutArtBmpH, SRCCOPY);
+                SelectObject(memDC, oldBmp);
+                DeleteDC(memDC);
+                textLeft = pad + artSz + pad;
+            }
+        }
+
+        // Title line — Segoe UI SemiBold 13pt, white
+        HFONT fTitle = CreateFontW(
+            -MulDiv(13, logPx, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT fPrev = (HFONT)SelectObject(hdc, fTitle);
+        SetTextColor(hdc, RGB(240, 240, 240));
+        RECT rTitle = { textLeft, pad, W - pad, H / 2 };
+        DrawTextW(hdc, title.c_str(), -1, &rTitle,
+                  DT_SINGLELINE | DT_VCENTER | DT_WORD_ELLIPSIS | DT_NOPREFIX);
+        SelectObject(hdc, fPrev);
+        DeleteObject(fTitle);
+
+        // Artist line — Segoe UI Regular 11pt, gray
+        HFONT fArtist = CreateFontW(
+            -MulDiv(11, logPx, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        fPrev = (HFONT)SelectObject(hdc, fArtist);
+        SetTextColor(hdc, RGB(160, 160, 180));
+        RECT rArtist = { textLeft, H / 2, W - pad, H - pad };
+        DrawTextW(hdc, artist.c_str(), -1, &rArtist,
+                  DT_SINGLELINE | DT_VCENTER | DT_WORD_ELLIPSIS | DT_NOPREFIX);
+        SelectObject(hdc, fPrev);
+        DeleteObject(fArtist);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_TIMER:
+        if (wp == 1) {
+            KillTimer(hwnd, 1);
+            ShowWindow(hwnd, SW_HIDE);
+        }
+        return 0;
+    case WM_FLYOUT_SHOW: {
+        KillTimer(hwnd, 1);
+        HWND tbar = g_hTaskbarWnd.load();
+        if (!tbar) return 0;
+        RECT tr; GetWindowRect(tbar, &tr);
+        int dpi = GetDpiForWindow(hwnd);
+        // Widget occupies panelWidth DIPs, inset (margin) DIPs from the taskbar's right edge.
+        // Flyout width matches the widget; height is fixed at kFlyoutHDIPs.
+        int marginPx  = MulDiv(g_FlyoutMarginDIPs.load(), dpi, 96);
+        int widgetWPx = MulDiv(g_Settings.panelWidth,     dpi, 96);
+        int flyoutH   = MulDiv(kFlyoutHDIPs,              dpi, 96);
+        int x = tr.right - marginPx - widgetWPx;
+        int y = tr.top   - flyoutH  - MulDiv(4, dpi, 96);
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, widgetWPx, flyoutH,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        InvalidateRect(hwnd, nullptr, TRUE);
+        return 0;
+    }
+    case WM_FLYOUT_HIDE_DELAYED:
+        SetTimer(hwnd, 1, 300, nullptr);
+        return 0;
+    case WM_FLYOUT_HIDE_NOW:
+        KillTimer(hwnd, 1);
+        ShowWindow(hwnd, SW_HIDE);
+        return 0;
+    case WM_FLYOUT_UPDATE:
+        if (IsWindowVisible(hwnd)) InvalidateRect(hwnd, nullptr, TRUE);
+        return 0;
+    case WM_FLYOUT_QUIT:
+        KillTimer(hwnd, 1);
+        DestroyWindow(hwnd);
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static DWORD WINAPI FlyoutThreadProc(LPVOID readyEvent) {
+    static const wchar_t kClass[] = L"NativeTaskbarMediaFlyout";
+    WNDCLASSEXW wc = {};
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = FlyoutWndProc;
+    wc.hInstance     = GetModuleHandleW(nullptr);
+    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)GetStockObject(NULL_BRUSH);
+    wc.lpszClassName = kClass;
+    RegisterClassExW(&wc);
+
+    g_FlyoutHwnd = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
+        kClass, nullptr, WS_POPUP,
+        0, 0, 300, 68,
+        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+    if (g_FlyoutHwnd)
+        SetLayeredWindowAttributes(g_FlyoutHwnd, 0, 235, LWA_ALPHA);
+
+    SetEvent((HANDLE)readyEvent);  // signal that HWND is ready (or creation failed)
+
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    g_FlyoutHwnd = nullptr;
+    return 0;
 }
 
 // ---------- Widget construction ----------
@@ -945,7 +1136,7 @@ static Grid BuildWidget() {
             e.Handled(true);
         }));
 
-    // SC-M-3: middle-click closes the active media session.
+    // SC-M-3: middle-click stops the active media session (TryStopAsync — closest public API to "close session").
     root.PointerPressed(PointerEventHandler(
         [](IInspectable const&, PointerRoutedEventArgs const& e) {
             using Windows::UI::Input::PointerUpdateKind;
@@ -960,9 +1151,33 @@ static Grid BuildWidget() {
             }
             if (session) {
                 [](GlobalSystemMediaTransportControlsSession s) -> winrt::fire_and_forget {
-                    try { co_await s.TryCloseAsync(); } catch (...) {}
+                    try { co_await s.TryStopAsync(); } catch (...) {}
                 }(session);
             }
+        }));
+
+    // SC-FLY-1: show flyout on hover, hide 300ms after cursor leaves.
+    // Flyout is a Win32 WS_POPUP HWND on its own thread; cross-thread via PostMessageW.
+    root.PointerEntered(PointerEventHandler(
+        [](IInspectable const&, PointerRoutedEventArgs const&) {
+            std::wstring title, artist;
+            {
+                std::lock_guard<std::mutex> mk(g_MediaMutex);
+                if (g_ActiveSessionIndex >= 0 && g_ActiveSessionIndex < g_MediaStateCount) {
+                    title  = g_MediaStates[g_ActiveSessionIndex].title;
+                    artist = g_MediaStates[g_ActiveSessionIndex].artist;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_FlyoutContentMutex);
+                g_FlyoutTitleStr  = std::move(title);
+                g_FlyoutArtistStr = std::move(artist);
+            }
+            if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_SHOW, 0, 0);
+        }));
+    root.PointerExited(PointerEventHandler(
+        [](IInspectable const&, PointerRoutedEventArgs const&) {
+            if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_HIDE_DELAYED, 0, 0);
         }));
 
     return root;
@@ -1360,6 +1575,16 @@ static void ApplyStateToWidget(Grid widget) {
                 if (auto wRoot = FindByName<Grid>(widget, kWidgetRootName))
                     wRoot.Background(nullptr);
             }
+            // SC-FLY-1: clear flyout art bitmap when no thumbnail is available.
+            {
+                std::lock_guard<std::mutex> lk(g_FlyoutArtMutex);
+                if (g_FlyoutArtHBitmap) {
+                    DeleteObject(g_FlyoutArtHBitmap);
+                    g_FlyoutArtHBitmap = nullptr;
+                    g_FlyoutArtBmpW = g_FlyoutArtBmpH = 0;
+                }
+            }
+            if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_UPDATE, 0, 0);
         } else {
             // Art available — open stream async and decode into BitmapImage.
             // This coroutine always starts on the UI dispatcher thread (called
@@ -1442,6 +1667,56 @@ static void ApplyStateToWidget(Grid widget) {
                             root.Background(grad);
                         } WH_CATCH(L"ApplyStateToWidget/ChameleonColors")
                     }
+
+                    // SC-FLY-1: decode art to HBITMAP for the flyout panel.
+                    // Uses GetPixelDataAsync/DetachPixelData — avoids IMemoryBufferByteAccess
+                    // COM QI which fails in the taskbar's WinRT context.
+                    try {
+                        auto streamF = co_await ref.OpenReadAsync();
+                        if (g_Unloading.load()) co_return;
+                        auto decoder = co_await BitmapDecoder::CreateAsync(streamF);
+                        uint32_t bmpW = decoder.PixelWidth();
+                        uint32_t bmpH = decoder.PixelHeight();
+                        if (bmpW && bmpH) {
+                            auto pixelData = co_await decoder.GetPixelDataAsync(
+                                BitmapPixelFormat::Bgra8,
+                                BitmapAlphaMode::Ignore,
+                                BitmapTransform{},
+                                ExifOrientationMode::IgnoreExifOrientation,
+                                ColorManagementMode::DoNotColorManage);
+                            if (g_Unloading.load()) co_return;
+                            auto bytes = pixelData.DetachPixelData();
+                            uint32_t stride = bmpW * 4;
+                            if (bytes.size() >= stride * bmpH) {
+                                BITMAPINFOHEADER bmi = {};
+                                bmi.biSize        = sizeof(bmi);
+                                bmi.biWidth       = (LONG)bmpW;
+                                bmi.biHeight      = -(LONG)bmpH;
+                                bmi.biPlanes      = 1;
+                                bmi.biBitCount    = 32;
+                                bmi.biCompression = BI_RGB;
+                                HDC screenDC = GetDC(nullptr);
+                                void* bits = nullptr;
+                                HBITMAP hbm = CreateDIBSection(screenDC,
+                                    reinterpret_cast<BITMAPINFO*>(&bmi),
+                                    DIB_RGB_COLORS, &bits, nullptr, 0);
+                                ReleaseDC(nullptr, screenDC);
+                                if (hbm && bits) {
+                                    memcpy(bits, bytes.data(), stride * bmpH);
+                                    HBITMAP old = nullptr;
+                                    {
+                                        std::lock_guard<std::mutex> lk(g_FlyoutArtMutex);
+                                        old = g_FlyoutArtHBitmap;
+                                        g_FlyoutArtHBitmap = hbm;
+                                        g_FlyoutArtBmpW    = (int)bmpW;
+                                        g_FlyoutArtBmpH    = (int)bmpH;
+                                    }
+                                    if (old) DeleteObject(old);
+                                    if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_UPDATE, 0, 0);
+                                }
+                            }
+                        }
+                    } WH_CATCH(L"ApplyStateToWidget/FlyoutArt")
                 } WH_CATCH(L"ApplyStateToWidget/LoadArt")
             }(weakArt, weakRoot, ref, version);
         }
@@ -1678,6 +1953,7 @@ static void RemoveWidget() {
                     try { g_WidgetFadeStoryboard.Stop(); } catch (...) {}
                     g_WidgetFadeStoryboard = nullptr;
                 }
+                if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_HIDE_NOW, 0, 0);
                 auto g = weakGrid.get();
                 if (!g) return;
                 auto children = g.Children();
@@ -2203,6 +2479,14 @@ BOOL Wh_ModInit() {
     HMODULE taskbarView = GetModuleHandleW(L"Taskbar.View.dll");
     if (!taskbarView) taskbarView = GetModuleHandleW(L"ExplorerExtensions.dll");
 
+    // Start flyout thread unconditionally; it waits for WM_FLYOUT_SHOW messages.
+    {
+        HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        g_FlyoutThread = CreateThread(nullptr, 0, FlyoutThreadProc, ready, 0, &g_FlyoutThreadId);
+        if (g_FlyoutThread) WaitForSingleObject(ready, 2000);
+        CloseHandle(ready);
+    }
+
     if (taskbarView) {
         // Direct path: DLL already loaded. Initialize everything immediately.
         g_TaskbarViewDllLoaded = true;
@@ -2228,6 +2512,16 @@ BOOL Wh_ModInit() {
 
 void Wh_ModUninit() {
     g_Unloading = true;
+
+    // Shut down the flyout window and its thread before any other teardown.
+    if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_QUIT, 0, 0);
+    if (g_FlyoutThread) {
+        WaitForSingleObject(g_FlyoutThread, 2000);
+        CloseHandle(g_FlyoutThread);
+        g_FlyoutThread = nullptr;
+    }
+    // Free flyout art bitmap (thread is already stopped so no lock needed).
+    if (g_FlyoutArtHBitmap) { DeleteObject(g_FlyoutArtHBitmap); g_FlyoutArtHBitmap = nullptr; }
 
     if (g_PollStop) SetEvent(g_PollStop);
     if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
