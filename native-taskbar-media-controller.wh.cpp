@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.4.4
+// @version         1.4.7
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -691,17 +691,40 @@ static void BringSourceAppToFront(const std::wstring& aumid) {
 
 // ---------- SC-FLY-1: flyout Win32 window ----------
 
-static constexpr int kFlyoutHDIPs  = 80;  // flyout panel height in DIPs
-static constexpr int kFlyoutPadDIPs = 8;
+// Returns true when apps should use dark mode.
+// Resolves uxtheme.dll ordinal 132 (ShouldAppsUseDarkMode) — the same function
+// Windows itself uses, more reliable than registry reads in injected contexts.
+static bool IsSystemDarkMode() {
+    using Fn = bool (WINAPI*)();
+    static Fn fn = []() -> Fn {
+        HMODULE ux = GetModuleHandleW(L"uxtheme.dll");
+        if (!ux) ux = LoadLibraryW(L"uxtheme.dll");
+        return ux ? reinterpret_cast<Fn>(GetProcAddress(ux, (LPCSTR)132)) : nullptr;
+    }();
+    return fn ? fn() : false;
+}
+
+// Width matches the widget (g_Settings.panelWidth); height is fixed.
+// Layout: full-width album art square at top, title + artist stacked below.
+static constexpr int kFlyoutHDIPs   = 380;
+static constexpr int kFlyoutPadDIPs = 12;
 
 static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
-        // Windows 11 small rounded corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUNDSMALL = 3)
-        DWORD corner = 3;
-        DwmSetWindowAttribute(hwnd, 33, &corner, sizeof(corner));
+        DWORD corner = 2;  // DWMWCP_ROUND
+        DwmSetWindowAttribute(hwnd, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, &corner, sizeof(corner));
+        BOOL dark = IsSystemDarkMode() ? TRUE : FALSE;
+        DwmSetWindowAttribute(hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
         return 0;
     }
+    case WM_SETTINGCHANGE:
+        if (lp && lstrcmpiW(reinterpret_cast<LPCWSTR>(lp), L"ImmersiveColorSet") == 0) {
+            BOOL dark = IsSystemDarkMode() ? TRUE : FALSE;
+            DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark));
+            InvalidateRect(hwnd, nullptr, TRUE);
+        }
+        return 0;
     case WM_ERASEBKGND:
         return 1;  // suppress flicker; WM_PAINT fills everything
     case WM_PAINT: {
@@ -710,8 +733,12 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         RECT rc; GetClientRect(hwnd, &rc);
         int W = rc.right, H = rc.bottom;
 
-        // Dark background
-        HBRUSH bgBrush = CreateSolidBrush(RGB(20, 20, 32));
+        bool darkMode = IsSystemDarkMode();
+        COLORREF clrBg     = darkMode ? RGB( 20,  20,  32) : RGB(243, 243, 248);
+        COLORREF clrTitle  = darkMode ? RGB(240, 240, 240) : RGB( 20,  20,  30);
+        COLORREF clrArtist = darkMode ? RGB(160, 160, 180) : RGB( 90,  90, 110);
+
+        HBRUSH bgBrush = CreateSolidBrush(clrBg);
         FillRect(hdc, &rc, bgBrush);
         DeleteObject(bgBrush);
 
@@ -723,13 +750,13 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             artist = g_FlyoutArtistStr;
         }
 
-        int logPx  = GetDeviceCaps(hdc, LOGPIXELSY);
-        int pad    = MulDiv(kFlyoutPadDIPs, logPx, 96);
-        int artSz  = H - 2 * pad;  // square size: full height minus top+bottom padding
+        int logPx = GetDeviceCaps(hdc, LOGPIXELSY);
+        int pad   = MulDiv(kFlyoutPadDIPs, logPx, 96);
+        // Art square fills the full width (minus padding on each side).
+        int artSz = W - 2 * pad;
         SetBkMode(hdc, TRANSPARENT);
 
-        // Album art — StretchBlt with HALFTONE for quality downscaling
-        int textLeft = pad;
+        // Album art — full-width square at top, HALFTONE for quality scaling
         {
             std::lock_guard<std::mutex> lk(g_FlyoutArtMutex);
             if (g_FlyoutArtHBitmap) {
@@ -741,31 +768,34 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                            memDC, 0, 0, g_FlyoutArtBmpW, g_FlyoutArtBmpH, SRCCOPY);
                 SelectObject(memDC, oldBmp);
                 DeleteDC(memDC);
-                textLeft = pad + artSz + pad;
             }
         }
 
-        // Title line — Segoe UI SemiBold 13pt, white
+        // Text zone: below the art, split evenly between title and artist
+        int textTop = pad + artSz + MulDiv(8, logPx, 96);
+        int textH   = H - textTop - pad;
+
+        // Title — Segoe UI SemiBold 15pt, white
         HFONT fTitle = CreateFontW(
-            -MulDiv(13, logPx, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -MulDiv(15, logPx, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT fPrev = (HFONT)SelectObject(hdc, fTitle);
-        SetTextColor(hdc, RGB(240, 240, 240));
-        RECT rTitle = { textLeft, pad, W - pad, H / 2 };
+        SetTextColor(hdc, clrTitle);
+        RECT rTitle = { pad, textTop, W - pad, textTop + textH / 2 };
         DrawTextW(hdc, title.c_str(), -1, &rTitle,
                   DT_SINGLELINE | DT_VCENTER | DT_WORD_ELLIPSIS | DT_NOPREFIX);
         SelectObject(hdc, fPrev);
         DeleteObject(fTitle);
 
-        // Artist line — Segoe UI Regular 11pt, gray
+        // Artist — Segoe UI Regular 12pt, muted
         HFONT fArtist = CreateFontW(
-            -MulDiv(11, logPx, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            -MulDiv(12, logPx, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         fPrev = (HFONT)SelectObject(hdc, fArtist);
-        SetTextColor(hdc, RGB(160, 160, 180));
-        RECT rArtist = { textLeft, H / 2, W - pad, H - pad };
+        SetTextColor(hdc, clrArtist);
+        RECT rArtist = { pad, textTop + textH / 2, W - pad, H - pad };
         DrawTextW(hdc, artist.c_str(), -1, &rArtist,
                   DT_SINGLELINE | DT_VCENTER | DT_WORD_ELLIPSIS | DT_NOPREFIX);
         SelectObject(hdc, fPrev);
@@ -786,8 +816,7 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (!tbar) return 0;
         RECT tr; GetWindowRect(tbar, &tr);
         int dpi = GetDpiForWindow(hwnd);
-        // Widget occupies panelWidth DIPs, inset (margin) DIPs from the taskbar's right edge.
-        // Flyout width matches the widget; height is fixed at kFlyoutHDIPs.
+        // Flyout matches widget width, right-aligned to the widget's right edge.
         int marginPx  = MulDiv(g_FlyoutMarginDIPs.load(), dpi, 96);
         int widgetWPx = MulDiv(g_Settings.panelWidth,     dpi, 96);
         int flyoutH   = MulDiv(kFlyoutHDIPs,              dpi, 96);
@@ -831,7 +860,7 @@ static DWORD WINAPI FlyoutThreadProc(LPVOID readyEvent) {
     g_FlyoutHwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
         kClass, nullptr, WS_POPUP,
-        0, 0, 300, 68,
+        0, 0, 300, 380,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 
     if (g_FlyoutHwnd)
