@@ -4,6 +4,13 @@ This file is append-only. Each entry is prepended to the top of the entries sect
 
 ---
 
+## 2026-05-25 (commit c1fb551, branch main)
+
+- Findings: Critical 0 | High 0 | Medium 3 | Low 2 | Info 3
+- Routing: Mechanical 1 | Targeted-fix 0 | Multi-file 0 | Security-critical 0 | Config/CI 0 | Doc-edit 4 | Speculative-triage 0
+- Report: audit-reports/audit-2026-05-25-c1fb551.md
+- Top priority: Update `==WindhawkModReadme==` — user-facing Windhawk page description missing hover flyout, middle-click, crossfade, widget fade, smooth progress (not in working tree; requires new work)
+
 ## 2026-05-21 (commit c7a2675, branch main)
 
 - Findings: Critical 0 | High 0 | Medium 1 | Low 3 | Info 4

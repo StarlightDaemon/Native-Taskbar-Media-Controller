@@ -2,7 +2,7 @@
 
 > A [Windhawk](https://windhawk.net) mod that injects a native media controller directly into the Windows 11 taskbar.
 
-**Status: v1.1.0**
+**Status: v1.4.8**
 
 Unlike overlay-based taskbar media mods, this one inserts the widget as a real child element of the taskbar's own XAML tree (`Grid#RootGrid` under `Taskbar.TaskbarFrame`). There is no separate window, no `SetLayeredWindowAttributes`, no GDI painting loop. The widget inherits correct z-ordering, auto-hide handling, and DPI scaling from the taskbar itself.
 
@@ -14,10 +14,15 @@ Unlike overlay-based taskbar media mods, this one inserts the widget as a real c
 - **Multi-session** — when multiple media apps are active simultaneously, a session count chip appears; tap it to cycle through sessions
 - **Album art** — cover art displayed inline; collapses gracefully when unavailable
 - **Track progress bar** — slim bar at the widget bottom with a position/duration timestamp; hidden automatically when the source doesn't expose timeline data
+- **Hover flyout** — hovering over the widget shows an expanded panel with full-width album art, title, and artist; the flyout automatically follows the system dark/light theme
 - **Audiobook mode** — sessions longer than one hour (or with chapter keywords) are treated as audiobooks: skip buttons navigate chapters and playback speed is shown next to the title
 - **Double-click to focus** — double-click the widget to bring the source media app to the foreground, or minimize it if already focused
-- **Adaptive text color** — text adjusts to the Windows light/dark theme; in Chameleon mode, brightness is derived from album art
-- **Background style** — transparent, acrylic frosted-glass, or Chameleon (gradient derived from dominant album art color)
+- **Middle-click to close** — middle-click the widget to stop the active media session
+- **Adaptive text color** — text adjusts to the Windows light/dark theme
+- **Acrylic background** — frosted-glass backdrop using the system's `AcrylicBrush(HostBackdrop)`
+- **Text crossfade** — smooth opacity fade-out/fade-in on track changes
+- **Widget fade** — smooth opacity animation when the widget appears or disappears
+- **Smooth progress interpolation** — a 500ms timer fills in the progress bar between SMTC event ticks for fluid movement
 - **Fullscreen auto-hide** — the panel collapses when a fullscreen app is detected; also hides when the taskbar slides off-screen in auto-hide mode
 - **Live repositioning** — the panel tracks the system tray width in real time, so adding or removing tray icons keeps it correctly positioned
 
@@ -50,9 +55,9 @@ Unlike overlay-based taskbar media mods, this one inserts the widget as a real c
 | Gap from tray (px) | 8 | Horizontal gap between the widget and the system tray |
 | Hide when fullscreen | true | Collapses the panel when a fullscreen or presentation state is detected |
 | Show track progress bar and timestamp | true | Enables the slim progress bar and position/duration display; hidden automatically when the source doesn't expose timeline data |
-| Adaptive text color | true | In Acrylic mode, follows the Windows light/dark theme; in Chameleon mode, follows album art brightness |
-| Theme | Acrylic | None (transparent), Acrylic (frosted-glass blur), or Chameleon (gradient from album art) |
+| Adaptive text color | true | Follows the Windows light/dark theme for text and button colors |
 | Scrolling title | true | Enables the marquee ticker for titles that overflow the widget width |
+| Flyout transparency | false | On: hover flyout is slightly transparent (92% opaque). Off: flyout uses a solid background matching the system theme |
 
 ## Roadmap
 
@@ -60,8 +65,6 @@ For the full analysis of feature candidates across 11 community forks, see [`for
 
 ### Under consideration
 
-- Blurred album art background (SC-UI-1)
-- Hover flyout panel — expanded metadata and art on mouse-over (SC-FLY-1)
 - Synchronized LRC lyrics (SC-HT-1)
 - FFT audio visualizer (SC-GR-1)
 
