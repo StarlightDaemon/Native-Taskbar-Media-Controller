@@ -37,3 +37,6 @@ ehthumbs.db
 # Runtime diagnostics
 *.evtx
 *.log
+
+# Diagnostic probes
+check_xaml.cpp

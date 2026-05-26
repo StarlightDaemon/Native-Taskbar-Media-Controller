@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.4.7
+// @version         1.4.8
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -32,13 +32,20 @@ DPI handling automatically.
 - **Audiobook mode** — tracks longer than one hour are treated as audiobooks:
   skip buttons navigate chapters, and the playback rate is shown next to the
   title when it differs from 1×
+- **Hover flyout** — hovering over the widget shows an expanded panel with
+  full-width album art, title, and artist; follows the system dark/light theme
+- **Middle-click to close** — middle-click the widget to stop the active
+  media session
+- **Scrolling title** — long titles marquee-scroll smoothly inside the widget;
+  gated by the "Scroll long titles" setting
 - **Fullscreen auto-hide** — panel collapses when a fullscreen app is
   detected; also hides when the taskbar slides off-screen in auto-hide mode
 - **Adaptive text color** — text adjusts to light or dark based on the Windows theme
 - **Double-click to focus** — double-click the widget to bring the source
   media app to the foreground (or minimize it if already focused)
 - **Track progress bar** — a slim bar at the widget bottom shows playback
-  position; paired with the timestamp display
+  position; paired with the timestamp display; smoothly interpolated between
+  SMTC update ticks for fluid movement
 
 ## Compatibility notes
 
@@ -294,7 +301,7 @@ static ULONGLONG            g_ProgressLastTickMs = 0;
 #define WM_FLYOUT_QUIT         (WM_APP + 24)  // destroy HWND and exit thread message loop
 #define WM_FLYOUT_SETTINGS     (WM_APP + 25)  // re-apply alpha after settings change
 
-static HWND   g_FlyoutHwnd     = nullptr;
+static std::atomic<HWND> g_FlyoutHwnd{ nullptr };
 static HANDLE g_FlyoutThread   = nullptr;
 static DWORD  g_FlyoutThreadId = 0;
 
@@ -784,15 +791,16 @@ static DWORD WINAPI FlyoutThreadProc(LPVOID readyEvent) {
     wc.lpszClassName = kClass;
     RegisterClassExW(&wc);
 
-    g_FlyoutHwnd = CreateWindowExW(
+    g_FlyoutHwnd.store(CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
         kClass, nullptr, WS_POPUP,
         0, 0, 300, 380,
-        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr));
 
-    if (g_FlyoutHwnd)
-        SetLayeredWindowAttributes(g_FlyoutHwnd, 0,
+    if (HWND fly = g_FlyoutHwnd.load()) {
+        SetLayeredWindowAttributes(fly, 0,
             g_Settings.flyoutTransparent ? 235 : 255, LWA_ALPHA);
+    }
 
     SetEvent((HANDLE)readyEvent);  // signal that HWND is ready (or creation failed)
 
@@ -801,7 +809,8 @@ static DWORD WINAPI FlyoutThreadProc(LPVOID readyEvent) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-    g_FlyoutHwnd = nullptr;
+    g_FlyoutHwnd.store(nullptr);
+    UnregisterClassW(kClass, GetModuleHandleW(nullptr));
     return 0;
 }
 
@@ -1130,11 +1139,11 @@ static Grid BuildWidget() {
                 g_FlyoutTitleStr  = std::move(title);
                 g_FlyoutArtistStr = std::move(artist);
             }
-            if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_SHOW, 0, 0);
+            if (HWND fly = g_FlyoutHwnd.load()) PostMessageW(fly, WM_FLYOUT_SHOW, 0, 0);
         }));
     root.PointerExited(PointerEventHandler(
         [](IInspectable const&, PointerRoutedEventArgs const&) {
-            if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_HIDE_DELAYED, 0, 0);
+            if (HWND fly = g_FlyoutHwnd.load()) PostMessageW(fly, WM_FLYOUT_HIDE_DELAYED, 0, 0);
         }));
 
     return root;
@@ -1531,7 +1540,7 @@ static void ApplyStateToWidget(Grid widget) {
                     g_FlyoutArtBmpW = g_FlyoutArtBmpH = 0;
                 }
             }
-            if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_UPDATE, 0, 0);
+            if (HWND fly = g_FlyoutHwnd.load()) PostMessageW(fly, WM_FLYOUT_UPDATE, 0, 0);
         } else {
             // Art available — open stream async and decode into BitmapImage.
             // This coroutine always starts on the UI dispatcher thread (called
@@ -1606,7 +1615,7 @@ static void ApplyStateToWidget(Grid widget) {
                                         g_FlyoutArtBmpH    = (int)bmpH;
                                     }
                                     if (old) DeleteObject(old);
-                                    if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_UPDATE, 0, 0);
+                                    if (HWND fly = g_FlyoutHwnd.load()) PostMessageW(fly, WM_FLYOUT_UPDATE, 0, 0);
                                 }
                             }
                         }
@@ -1798,19 +1807,13 @@ static void RemoveWidget() {
     }
     if (!widget || !rootGrid) return;
 
-    // Stop marquee and revoke SizeChanged token before removing the widget.
-    StopMarquee();
-    if (g_TitleSizeChangedToken.value) {
-        if (auto tb = FindByName<TextBlock>(widget, kTitleName))
-            tb.SizeChanged(g_TitleSizeChangedToken);
-        g_TitleSizeChangedToken = {};
-    }
-
     try {
-        auto weakGrid = make_weak(rootGrid);
+        auto weakGrid  = make_weak(rootGrid);
+        auto weakWidget = make_weak(widget);
         rootGrid.Dispatcher().RunAsync(
             Windows::UI::Core::CoreDispatcherPriority::Normal,
-            [weakGrid]() {
+            [weakGrid, weakWidget]() {
+                // All XAML cleanup must happen on the dispatcher thread.
                 StopMarquee();
                 StopProgressTimer();
                 if (g_TextFadeStoryboard) {
@@ -1821,7 +1824,16 @@ static void RemoveWidget() {
                     try { g_WidgetFadeStoryboard.Stop(); } catch (...) {}
                     g_WidgetFadeStoryboard = nullptr;
                 }
-                if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_HIDE_NOW, 0, 0);
+                // Revoke SizeChanged token on the correct (UI) thread.
+                if (g_TitleSizeChangedToken.value) {
+                    if (auto w = weakWidget.get()) {
+                        if (auto tb = FindByName<TextBlock>(w, kTitleName))
+                            tb.SizeChanged(g_TitleSizeChangedToken);
+                    }
+                    g_TitleSizeChangedToken = {};
+                }
+                if (HWND fly = g_FlyoutHwnd.load())
+                    PostMessageW(fly, WM_FLYOUT_HIDE_NOW, 0, 0);
                 auto g = weakGrid.get();
                 if (!g) return;
                 auto children = g.Children();
@@ -2382,7 +2394,7 @@ void Wh_ModUninit() {
     g_Unloading = true;
 
     // Shut down the flyout window and its thread before any other teardown.
-    if (g_FlyoutHwnd) PostMessageW(g_FlyoutHwnd, WM_FLYOUT_QUIT, 0, 0);
+    if (HWND fly = g_FlyoutHwnd.load()) PostMessageW(fly, WM_FLYOUT_QUIT, 0, 0);
     if (g_FlyoutThread) {
         WaitForSingleObject(g_FlyoutThread, 2000);
         CloseHandle(g_FlyoutThread);
@@ -2454,8 +2466,8 @@ void Wh_ModUninit() {
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
-    if (g_FlyoutHwnd)
-        PostMessageW(g_FlyoutHwnd, WM_FLYOUT_SETTINGS, 0, 0);
+    if (HWND fly = g_FlyoutHwnd.load())
+        PostMessageW(fly, WM_FLYOUT_SETTINGS, 0, 0);
     Grid widget{ nullptr };
     {
         std::lock_guard<std::mutex> g(g_WidgetMutex);

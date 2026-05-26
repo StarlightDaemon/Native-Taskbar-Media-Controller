@@ -1,11 +1,11 @@
 # Last Workspace Audit
 
-- Date: 2026-05-21
-- Commit: c7a2675
+- Date: 2026-05-25
+- Commit: c1fb551
 - Branch: main
-- Report: audit-reports/audit-2026-05-21-c7a2675.md
-- Findings: Critical 0 | High 0 | Medium 1 | Low 3 | Info 4
+- Report: audit-reports/audit-2026-05-25-c1fb551.md
+- Findings: Critical 0 | High 0 | Medium 3 | Low 2 | Info 3
 - Top 3 priorities:
-  1. Close stale OL-3 in OPEN_LOOPS.md — feature/rename-to-native-controller is fully merged into main (dc4c0d2) but the open loop still declares it unmerged
-  2. Add .gitignore for C++ / Windows / Windhawk project — no .gitignore present, repo is unguarded against accidental artifact commits
-  3. Fix broken README link — https://github.com/Hashah2311/taskbar-music-lounge returns 404 (repo deleted or renamed)
+  1. Update `==WindhawkModReadme==` in source file — missing hover flyout, middle-click, crossfade, widget fade, smooth progress (requires new work)
+  2. Commit working tree doc refresh (CURRENT_STATE, README, GOALS already corrected) and code hardening (atomic g_FlyoutHwnd, UnregisterClassW, threading fix)
+  3. Fix `last-audit.md` malformed report path before committing, then tag and push v1.4.8
