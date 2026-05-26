@@ -775,29 +775,29 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int textTop = pad + artSz + MulDiv(8, logPx, 96);
         int textH   = H - textTop - pad;
 
-        // Title — Segoe UI SemiBold 15pt, white
+        // Title — Segoe UI SemiBold 13pt, white
         HFONT fTitle = CreateFontW(
-            -MulDiv(15, logPx, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -MulDiv(13, logPx, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT fPrev = (HFONT)SelectObject(hdc, fTitle);
         SetTextColor(hdc, clrTitle);
         RECT rTitle = { pad, textTop, W - pad, textTop + textH / 2 };
         DrawTextW(hdc, title.c_str(), -1, &rTitle,
-                  DT_SINGLELINE | DT_VCENTER | DT_WORD_ELLIPSIS | DT_NOPREFIX);
+                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
         SelectObject(hdc, fPrev);
         DeleteObject(fTitle);
 
-        // Artist — Segoe UI Regular 12pt, muted
+        // Artist — Segoe UI Regular 11pt, muted
         HFONT fArtist = CreateFontW(
-            -MulDiv(12, logPx, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            -MulDiv(11, logPx, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         fPrev = (HFONT)SelectObject(hdc, fArtist);
         SetTextColor(hdc, clrArtist);
         RECT rArtist = { pad, textTop + textH / 2, W - pad, H - pad };
         DrawTextW(hdc, artist.c_str(), -1, &rArtist,
-                  DT_SINGLELINE | DT_VCENTER | DT_WORD_ELLIPSIS | DT_NOPREFIX);
+                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
         SelectObject(hdc, fPrev);
         DeleteObject(fArtist);
 
