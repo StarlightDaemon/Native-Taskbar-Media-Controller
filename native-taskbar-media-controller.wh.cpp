@@ -34,14 +34,11 @@ DPI handling automatically.
   title when it differs from 1×
 - **Fullscreen auto-hide** — panel collapses when a fullscreen app is
   detected; also hides when the taskbar slides off-screen in auto-hide mode
-- **Adaptive text color** — text adjusts to light or dark based on the Windows
-  theme; in Chameleon mode, brightness is derived from the album art
+- **Adaptive text color** — text adjusts to light or dark based on the Windows theme
 - **Double-click to focus** — double-click the widget to bring the source
   media app to the foreground (or minimize it if already focused)
 - **Track progress bar** — a slim bar at the widget bottom shows playback
   position; paired with the timestamp display
-- **Background style** — choose transparent, acrylic frosted-glass, or
-  Chameleon (gradient derived from dominant album art color)
 
 ## Compatibility notes
 
@@ -78,18 +75,13 @@ DPI handling automatically.
   $description: Enables the slim progress bar at the bottom of the widget and the position/duration timestamp. Hidden automatically when the media source does not expose timeline data.
 - AdaptiveTextColor: true
   $name: Adaptive text color
-  $description: In Acrylic mode, follows the Windows light/dark app theme. In Chameleon mode, follows album art brightness.
-- BackgroundStyle: acrylic
-  $name: Theme
-  $description: "None: transparent. Acrylic: frosted-glass blur. Chameleon: gradient derived from album art. Blurred Art: album art stretched and blurred as the background."
-  $options:
-  - none: None
-  - acrylic: Acrylic
-  - chameleon: Chameleon
-  - blurred-art: Blurred Art
+  $description: Switches text to near-black in Windows light mode, white in dark mode.
 - MarqueeScroll: true
   $name: Scroll long titles
   $description: Marquee-scroll title text that is wider than the available space
+- FlyoutTransparent: false
+  $name: Flyout transparency
+  $description: "On: hover flyout is slightly transparent (92% opaque). Off: flyout uses a solid background that matches the native Windows theme color."
 */
 // ==/WindhawkModSettings==
 
@@ -101,17 +93,6 @@ DPI handling automatically.
 #include <shellapi.h>
 #include <shlobj.h>
 #include <propsys.h>
-// IMemoryBufferByteAccess — not in Windhawk's MinGW toolchain headers.
-// Declare the COM interface and register its GUID via __mingw_uuidof specialization
-// (MinGW maps __uuidof to __mingw_uuidof; __declspec(uuid(...)) is silently ignored).
-struct IMemoryBufferByteAccess : IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE GetBuffer(uint8_t** value, uint32_t* capacity) = 0;
-};
-static constexpr GUID IMemoryBufferByteAccess_iid{
-    0x5b0d3235,0x4dba,0x4d44,{0x86,0x5e,0x8f,0x1d,0x0e,0xf4,0xf6,0xe5}
-};
-template<> constexpr const GUID& __mingw_uuidof<IMemoryBufferByteAccess>()  { return IMemoryBufferByteAccess_iid; }
-template<> constexpr const GUID& __mingw_uuidof<IMemoryBufferByteAccess*>() { return IMemoryBufferByteAccess_iid; }
 // PKEY_AppUserModel_ID is declared extern in propkey.h but not exported by the
 // MinGW/lld propsys stub. Define the key locally using its well-known GUID/PID.
 static const PROPERTYKEY kPKEY_AppUserModel_ID = {
@@ -199,8 +180,8 @@ struct ModSettings {
     bool hideFullscreen = true;
     bool showProgress = true;
     bool adaptiveTextColor = true;
-    int backgroundStyle = 1;  // 0=None 1=Acrylic 2=Chameleon
     bool marqueeScroll = true;
+    bool flyoutTransparent = false;
 } g_Settings;
 
 static void LoadSettings() {
@@ -210,16 +191,9 @@ static void LoadSettings() {
     g_Settings.offsetX      = Wh_GetIntSetting(L"OffsetX");
     g_Settings.hideFullscreen    = Wh_GetIntSetting(L"HideFullscreen") != 0;
     g_Settings.showProgress      = Wh_GetIntSetting(L"ShowProgress") != 0;
-    g_Settings.adaptiveTextColor = Wh_GetIntSetting(L"AdaptiveTextColor") != 0;
-    g_Settings.marqueeScroll     = Wh_GetIntSetting(L"MarqueeScroll") != 0;
-    {
-        auto s = Wh_GetStringSetting(L"BackgroundStyle");
-        if      (wcscmp(s, L"none")        == 0) g_Settings.backgroundStyle = 0;
-        else if (wcscmp(s, L"chameleon")  == 0) g_Settings.backgroundStyle = 2;
-        else if (wcscmp(s, L"blurred-art")== 0) g_Settings.backgroundStyle = 3;
-        else                                     g_Settings.backgroundStyle = 1; // "acrylic" or unknown
-        Wh_FreeStringSetting(s);
-    }
+    g_Settings.adaptiveTextColor  = Wh_GetIntSetting(L"AdaptiveTextColor") != 0;
+    g_Settings.marqueeScroll      = Wh_GetIntSetting(L"MarqueeScroll") != 0;
+    g_Settings.flyoutTransparent  = Wh_GetIntSetting(L"FlyoutTransparent") != 0;
     if (g_Settings.panelWidth   <= 0) g_Settings.panelWidth = 300;
     if (g_Settings.panelHeight  <= 0) g_Settings.panelHeight = 40;
     if (g_Settings.fontSize     <= 0) g_Settings.fontSize = 11;
@@ -299,7 +273,6 @@ static std::atomic<bool> g_ScanPending{ false };
 static std::atomic<bool> g_TaskbarViewDllLoaded{ false };
 static std::atomic<int> g_HookCallCounter{ 0 };
 static std::atomic<bool> g_Unloading{ false };
-static std::atomic<bool> g_ChameleonLightBg{ false };  // set by art loader; read in ApplyStateToWidget
 static Storyboard           g_MarqueeStoryboard{ nullptr };
 static Storyboard           g_TextFadeStoryboard{ nullptr };
 static Storyboard           g_WidgetFadeStoryboard{ nullptr };
@@ -319,6 +292,7 @@ static ULONGLONG            g_ProgressLastTickMs = 0;
 #define WM_FLYOUT_HIDE_NOW     (WM_APP + 22)  // cancel timer, hide immediately
 #define WM_FLYOUT_UPDATE       (WM_APP + 23)  // invalidate content (title/artist changed)
 #define WM_FLYOUT_QUIT         (WM_APP + 24)  // destroy HWND and exit thread message loop
+#define WM_FLYOUT_SETTINGS     (WM_APP + 25)  // re-apply alpha after settings change
 
 static HWND   g_FlyoutHwnd     = nullptr;
 static HANDLE g_FlyoutThread   = nullptr;
@@ -417,77 +391,24 @@ static Grid FindRootGrid(FrameworkElement taskbarFrame) {
     return nullptr;
 }
 
-// Returns true when Windows is configured for a light app theme.
-// Reads AppsUseLightTheme from the Personalize registry key (0 = dark, 1 = light).
+// Returns true when the taskbar/shell should use a light background.
+// Checks SystemUsesLightTheme (controls the taskbar itself) first, then falls
+// back to AppsUseLightTheme — whichever indicates light wins, so the widget's
+// Acrylic HostBackdrop (which follows the taskbar) and its text color agree.
 static bool IsSystemLightTheme() {
-    DWORD value = 0, size = sizeof(value);
-    RegGetValueW(HKEY_CURRENT_USER,
+    DWORD sysVal = 0, sysSize = sizeof(sysVal);
+    LSTATUS sySt = RegGetValueW(HKEY_CURRENT_USER,
         L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size);
-    return value != 0;
+        L"SystemUsesLightTheme", RRF_RT_REG_DWORD, nullptr, &sysVal, &sysSize);
+    DWORD appVal = 0, appSize = sizeof(appVal);
+    LSTATUS appSt = RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &appVal, &appSize);
+    return (sySt == ERROR_SUCCESS && sysVal != 0) || (appSt == ERROR_SUCCESS && appVal != 0);
 }
 
 static SolidColorBrush MakeBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return SolidColorBrush(ColorHelper::FromArgb(a, r, g, b));
-}
-
-// Returns up to two dominant RGBA colors from album art via 64-bucket quantization.
-// Each RGB channel is reduced to 2 bits (6 bits discarded), giving 4^3 = 64 buckets.
-// Returns {primary, secondary} — secondary equals primary when only one bucket dominates.
-// Pixel format must be Bgra8 (enforced by the caller via GetSoftwareBitmapAsync).
-static std::pair<Windows::UI::Color, Windows::UI::Color>
-ComputeDominantColors(SoftwareBitmap const& bmp) {
-    auto buf  = bmp.LockBuffer(BitmapBufferAccessMode::Read);
-    auto ref  = buf.CreateReference();
-    auto desc = buf.GetPlaneDescription(0);
-
-    // Obtain raw byte pointer via IMemoryBufferByteAccess COM interface.
-    uint32_t capacity = 0;
-    uint8_t const* px = nullptr;
-    {
-        auto byteAccess = ref.as<IMemoryBufferByteAccess>();
-        byteAccess->GetBuffer(const_cast<uint8_t**>(&px), &capacity);
-    }
-    if (!px) return { ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A),
-                     ColorHelper::FromArgb(0xFF,0x1A,0x1A,0x1A) };
-
-    int stride = desc.Stride;
-    int width  = desc.Width;
-    int height = desc.Height;
-
-    // 64-bucket histogram: bucket = (R>>6)<<4 | (G>>6)<<2 | (B>>6)
-    uint32_t counts[64]{};
-    uint32_t sumR[64]{}, sumG[64]{}, sumB[64]{};
-
-    for (int y = 0; y < height; ++y) {
-        uint8_t const* row = px + y * stride;
-        for (int x = 0; x < width * 4; x += 4) {  // Bgra8: B G R A
-            uint8_t b = row[x], g = row[x+1], r = row[x+2];
-            int bucket = ((r>>6)<<4) | ((g>>6)<<2) | (b>>6);
-            counts[bucket]++;
-            sumR[bucket] += r;
-            sumG[bucket] += g;
-            sumB[bucket] += b;
-        }
-    }
-
-    // Find top two buckets by count.
-    int top1 = 0, top2 = 0;
-    for (int i = 1; i < 64; ++i) {
-        if (counts[i] > counts[top1]) { top2 = top1; top1 = i; }
-        else if (i != top1 && counts[i] > counts[top2]) { top2 = i; }
-    }
-
-    auto avgColor = [&](int bucket) -> Windows::UI::Color {
-        uint32_t c = counts[bucket];
-        if (c == 0) return ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A);
-        return ColorHelper::FromArgb(0xFF,
-            (uint8_t)(sumR[bucket]/c),
-            (uint8_t)(sumG[bucket]/c),
-            (uint8_t)(sumB[bucket]/c));
-    };
-
-    return { avgColor(top1), counts[top2] > 0 ? avgColor(top2) : avgColor(top1) };
 }
 
 // Forward
@@ -734,9 +655,11 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int W = rc.right, H = rc.bottom;
 
         bool darkMode = IsSystemDarkMode();
-        COLORREF clrBg     = darkMode ? RGB( 20,  20,  32) : RGB(243, 243, 248);
-        COLORREF clrTitle  = darkMode ? RGB(240, 240, 240) : RGB( 20,  20,  30);
-        COLORREF clrArtist = darkMode ? RGB(160, 160, 180) : RGB( 90,  90, 110);
+        // Dark: neutral gray matching widget's AcrylicBrush TintColor (no blue cast).
+        // Light: GetSysColor(COLOR_3DFACE) is the OS panel/dialog surface — tracks theme.
+        COLORREF clrBg     = darkMode ? RGB(28, 28, 28) : GetSysColor(COLOR_3DFACE);
+        COLORREF clrTitle  = darkMode ? RGB(240, 240, 240) : GetSysColor(COLOR_WINDOWTEXT);
+        COLORREF clrArtist = darkMode ? RGB(160, 160, 180) : GetSysColor(COLOR_GRAYTEXT);
 
         HBRUSH bgBrush = CreateSolidBrush(clrBg);
         FillRect(hdc, &rc, bgBrush);
@@ -837,6 +760,10 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_FLYOUT_UPDATE:
         if (IsWindowVisible(hwnd)) InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
+    case WM_FLYOUT_SETTINGS:
+        SetLayeredWindowAttributes(hwnd, 0,
+            g_Settings.flyoutTransparent ? 235 : 255, LWA_ALPHA);
+        return 0;
     case WM_FLYOUT_QUIT:
         KillTimer(hwnd, 1);
         DestroyWindow(hwnd);
@@ -864,7 +791,8 @@ static DWORD WINAPI FlyoutThreadProc(LPVOID readyEvent) {
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 
     if (g_FlyoutHwnd)
-        SetLayeredWindowAttributes(g_FlyoutHwnd, 0, 235, LWA_ALPHA);
+        SetLayeredWindowAttributes(g_FlyoutHwnd, 0,
+            g_Settings.flyoutTransparent ? 235 : 255, LWA_ALPHA);
 
     SetEvent((HANDLE)readyEvent);  // signal that HWND is ready (or creation failed)
 
@@ -884,7 +812,7 @@ static Grid BuildWidget() {
     root.Width((double)g_Settings.panelWidth);
     root.HorizontalAlignment(HorizontalAlignment::Right);
     root.VerticalAlignment(VerticalAlignment::Stretch);
-    // Background is applied dynamically in ApplyStateToWidget() based on BackgroundStyle setting.
+    // Background (Acrylic) is applied on first call to ApplyStateToWidget().
     root.CornerRadius(CornerRadiusHelper::FromUniformRadius(8.0));
     Canvas::SetZIndex(root, 2);
     // Span all columns so right-alignment is relative to full taskbar width.
@@ -1553,15 +1481,10 @@ static void ApplyStateToWidget(Grid widget) {
     if (artistTb)
         AutomationProperties::SetName(artistTb, isAudiobook ? L"Author" : L"Artist");
 
-    // SC-UI-2: adaptive foreground follows Windows light/dark app theme, or
-    // Chameleon luma (g_ChameleonLightBg) when BackgroundStyle == 2.
-    // Light background → near-black text; dark background → white text.
-    bool lightBg = false;
-    if (g_Settings.backgroundStyle == 2)
-        lightBg = g_ChameleonLightBg.load();
-    else
-        lightBg = g_Settings.adaptiveTextColor && IsSystemLightTheme();
-    uint8_t fgHi = lightBg ? 0x1A : 0xFF;  // primary fg channel value
+    // SC-UI-2: adaptive foreground follows Windows light/dark theme.
+    // Light taskbar → near-black text; dark taskbar → white text.
+    bool lightBg = g_Settings.adaptiveTextColor && IsSystemLightTheme();
+    uint8_t fgHi = lightBg ? 0x1A : 0xFF;
     if (titleTb)   titleTb.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
     if (titleTb2)  titleTb2.Foreground(MakeBrush(0xFF, fgHi, fgHi, fgHi));
     if (artistTb)  artistTb.Foreground(MakeBrush(0xB3, fgHi, fgHi, fgHi));
@@ -1599,11 +1522,6 @@ static void ApplyStateToWidget(Grid widget) {
             // No session / Libby / app with no thumbnail — collapse and clear.
             artEl.Source(nullptr);
             artEl.Visibility(Visibility::Collapsed);
-            // Chameleon (style=2) / Blurred Art (style=3): clear background when no art.
-            if (g_Settings.backgroundStyle == 2 || g_Settings.backgroundStyle == 3) {
-                if (auto wRoot = FindByName<Grid>(widget, kWidgetRootName))
-                    wRoot.Background(nullptr);
-            }
             // SC-FLY-1: clear flyout art bitmap when no thumbnail is available.
             {
                 std::lock_guard<std::mutex> lk(g_FlyoutArtMutex);
@@ -1622,10 +1540,9 @@ static void ApplyStateToWidget(Grid widget) {
             // thread STA, so BitmapImage (which requires the UI thread) is
             // always created in the correct apartment — no extra RunAsync needed.
             auto weakArt  = make_weak(artEl);
-            auto weakRoot = make_weak(FindByName<Grid>(widget, kWidgetRootName));
             auto ref      = thumbnailRef;
             auto version  = thumbnailVersion;
-            [](weak_ref<Image> weakEl, weak_ref<Grid> weakRoot,
+            [](weak_ref<Image> weakEl,
                IRandomAccessStreamReference ref,
                uint32_t version) -> winrt::fire_and_forget {
                 g_AsyncTasks++;
@@ -1644,58 +1561,6 @@ static void ApplyStateToWidget(Grid widget) {
                     if (!el) co_return;
                     el.Source(bitmap);
                     el.Visibility(Visibility::Visible);
-
-                    // Blurred Art (style=3): decode art at 8px wide — upscale blurs it naturally.
-                    if (g_Settings.backgroundStyle == 3) {
-                        try {
-                            auto stream3 = co_await ref.OpenReadAsync();
-                            if (g_Unloading.load()) co_return;
-                            BitmapImage thumb;
-                            thumb.DecodePixelWidth(8);
-                            thumb.DecodePixelType(DecodePixelType::Logical);
-                            co_await thumb.SetSourceAsync(stream3);
-                            if (g_Unloading.load()) co_return;
-                            auto root = weakRoot.get();
-                            if (!root) co_return;
-                            ImageBrush brush;
-                            brush.ImageSource(thumb);
-                            brush.Stretch(Stretch::UniformToFill);
-                            root.Background(brush);
-                        } WH_CATCH(L"ApplyStateToWidget/BlurredArt")
-                    }
-
-                    // Chameleon (style=2): derive gradient from a second stream read.
-                    if (g_Settings.backgroundStyle == 2) {
-                        try {
-                            auto stream2 = co_await ref.OpenReadAsync();
-                            if (g_Unloading.load()) co_return;
-                            auto decoder = co_await BitmapDecoder::CreateAsync(stream2);
-                            auto softBmp = co_await decoder.GetSoftwareBitmapAsync(
-                                BitmapPixelFormat::Bgra8,
-                                BitmapAlphaMode::Ignore);
-                            auto [c1, c2] = ComputeDominantColors(softBmp);
-
-                            // Compute luma for adaptive text (BT.601).
-                            uint8_t luma = (uint8_t)(0.299f*c1.R + 0.587f*c1.G + 0.114f*c1.B);
-                            g_ChameleonLightBg.store(luma > 128);
-
-                            // Must not touch XAML off the UI thread — we are already
-                            // on the UI STA because all co_awaits above resume there.
-                            if (g_Unloading.load()) co_return;
-                            auto root = weakRoot.get();
-                            if (!root) co_return;
-
-                            LinearGradientBrush grad;
-                            grad.StartPoint({0.0, 0.0});
-                            grad.EndPoint({1.0, 0.0});
-                            GradientStop s1, s2;
-                            s1.Color(c1); s1.Offset(0.0);
-                            s2.Color(c2); s2.Offset(1.0);
-                            grad.GradientStops().Append(s1);
-                            grad.GradientStops().Append(s2);
-                            root.Background(grad);
-                        } WH_CATCH(L"ApplyStateToWidget/ChameleonColors")
-                    }
 
                     // SC-FLY-1: decode art to HBITMAP for the flyout panel.
                     // Uses GetPixelDataAsync/DetachPixelData — avoids IMemoryBufferByteAccess
@@ -1747,48 +1612,22 @@ static void ApplyStateToWidget(Grid widget) {
                         }
                     } WH_CATCH(L"ApplyStateToWidget/FlyoutArt")
                 } WH_CATCH(L"ApplyStateToWidget/LoadArt")
-            }(weakArt, weakRoot, ref, version);
+            }(weakArt, ref, version);
         }
     }
 
-    // OL-9: apply background brush based on BackgroundStyle setting.
-    // Done after art setup so Chameleon has a chance to set nullptr first;
-    // the fire_and_forget will replace it once pixels are decoded.
+    // Apply system-integrated Acrylic background (only once; brush persists across updates).
     {
         auto wRoot = FindByName<Grid>(widget, kWidgetRootName);
-        if (wRoot) {
-            if (g_Settings.backgroundStyle == 0) {
-                // None — transparent.
-                wRoot.Background(nullptr);
-            } else if (g_Settings.backgroundStyle == 1) {
-                // Acrylic — only apply if not already an AcrylicBrush.
-                bool alreadyAcrylic = wRoot.Background().try_as<AcrylicBrush>() != nullptr;
-                if (!alreadyAcrylic) {
-                    try {
-                        AcrylicBrush acrylic;
-                        acrylic.BackgroundSource(AcrylicBackgroundSource::HostBackdrop);
-                        acrylic.TintColor(ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
-                        acrylic.TintOpacity(0.6);
-                        wRoot.Background(acrylic);
-                    } catch (...) {
-                        wRoot.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
-                    }
-                }
-            } else if (g_Settings.backgroundStyle == 3) {
-                // Blurred Art (style=3): ImageBrush arrives via fire_and_forget.
-                // Pre-clear any non-ImageBrush so stale brushes don't linger.
-                auto cur = wRoot.Background();
-                if (cur && !cur.try_as<ImageBrush>()) {
-                    wRoot.Background(nullptr);
-                }
-            } else {
-                // Chameleon (style=2): gradient arrives via fire_and_forget.
-                // Pre-clear any non-gradient brush (e.g., leftover AcrylicBrush from
-                // a live style switch) so the old background doesn't linger.
-                auto cur = wRoot.Background();
-                if (cur && !cur.try_as<LinearGradientBrush>()) {
-                    wRoot.Background(nullptr);
-                }
+        if (wRoot && !wRoot.Background().try_as<AcrylicBrush>()) {
+            try {
+                AcrylicBrush acrylic;
+                acrylic.BackgroundSource(AcrylicBackgroundSource::HostBackdrop);
+                acrylic.TintColor(ColorHelper::FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
+                acrylic.TintOpacity(0.6);
+                wRoot.Background(acrylic);
+            } catch (...) {
+                wRoot.Background(MakeBrush(0xCC, 0x1A, 0x1A, 0x1A));
             }
         }
     }
@@ -2615,6 +2454,8 @@ void Wh_ModUninit() {
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
+    if (g_FlyoutHwnd)
+        PostMessageW(g_FlyoutHwnd, WM_FLYOUT_SETTINGS, 0, 0);
     Grid widget{ nullptr };
     {
         std::lock_guard<std::mutex> g(g_WidgetMutex);
