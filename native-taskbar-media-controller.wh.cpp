@@ -1293,14 +1293,15 @@ static Grid BuildWidget() {
     Grid::SetColumn(albumArt, 0);
     layout.Children().Append(albumArt);                // first child (inserted before session chip below)
 
-    // Session count chip (collapsed by default)
+    // Session count chip — overlaid at the top-right corner of the widget root
     TextBlock sessionCount;
     sessionCount.Name(kSessionCountName);
     sessionCount.Text(L"");
     sessionCount.Foreground(MakeBrush(0xFF, 0xFF, 0xFF, 0xFF));
-    sessionCount.FontSize((double)g_Settings.fontSize);
-    sessionCount.VerticalAlignment(VerticalAlignment::Center);
-    sessionCount.Margin(ThicknessHelper::FromLengths(0, 0, 6, 0));
+    sessionCount.FontSize(std::max(8.0, (double)g_Settings.fontSize - 2.0));
+    sessionCount.HorizontalAlignment(HorizontalAlignment::Right);
+    sessionCount.VerticalAlignment(VerticalAlignment::Top);
+    sessionCount.Margin(ThicknessHelper::FromLengths(0, 3, 6, 0));
     sessionCount.Visibility(Visibility::Collapsed);
     AutomationProperties::SetName(sessionCount, L"Cycle media session");
     sessionCount.Tapped(TappedEventHandler(
@@ -1312,8 +1313,6 @@ static Grid BuildWidget() {
             e.Handled(true);
             RefreshWidgetUI();
         }));
-    Grid::SetColumn(sessionCount, 1);
-    layout.Children().Append(sessionCount);
 
     // Title / artist column
     StackPanel textCol;
@@ -1509,6 +1508,7 @@ static Grid BuildWidget() {
     layout.Children().Append(skipFwd);
 
     root.Children().Append(layout);
+    root.Children().Append(sessionCount);
 
     // SC-KV-4: progress bar — two stacked Rectangles (track + fill) so we own
     // the colors completely; ProgressBar's internal template uses accent color.
