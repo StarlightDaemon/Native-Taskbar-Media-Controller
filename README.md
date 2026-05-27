@@ -23,11 +23,16 @@ Also includes: scrolling marquee title, inline album art, track progress bar wit
 
 ## Compatibility
 
-- **Spotify, Apple Music, Tidal, VLC, Windows Media Player** and most native apps work out of the box
-- **Browsers** (Chrome, Edge, Brave, Opera, Vivaldi, Arc, Thorium): one SMTC session per browser process; all tabs share it; timeline data is not available from browser sessions
-- **Firefox**: media info is fully supported; timeline data is not available (Mozilla Bugzilla 1689538)
-- **Libby, Audiobookshelf, Audible Cloud Player**: audiobook sessions are fully supported via audiobook mode
-- **Audible native app**: discontinued January 2022 — does not register SMTC sessions
+Works with any app that registers a Windows GSMTC session. Native apps get full support; browser sessions have protocol-level limitations that apply regardless of which browser is used.
+
+| Source | Timeline | Notes |
+|---|---|---|
+| **Native apps** — Spotify, Apple Music, Amazon Music, Tidal, Deezer, VLC, Windows Media Player, MusicBee, foobar2000, and most other media players | ✓ | Full support — title, artist, album art, and playback controls |
+| **Chromium browsers** — Chrome, Edge, Brave, Opera, Vivaldi, Arc, Thorium | — | One SMTC session per browser process; all open tabs share it |
+| **Firefox** | — | Full title and artist; no timeline data (Mozilla bug 1689538) |
+| **Libby** | — | Runs as a Chrome extension; the mod substitutes an embedded icon since Libby does not expose cover art via SMTC |
+| **Audiobookshelf** | ✓ | Chapter navigation active for sessions over one hour, or when the title contains the word "Chapter" |
+| **Audible Cloud Player** | — | Browser session via Chromium; treated the same as any other browser tab |
 
 ## Requirements
 
