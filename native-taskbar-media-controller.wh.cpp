@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.4.8
+// @version         1.4.9
 // @author          StarlightDaemon
 // @include         explorer.exe
 // @architecture    x86-64
@@ -23,7 +23,7 @@ DPI handling automatically.
 - **Now playing** — title and artist from any GSMTC-compatible app (Spotify,
   YouTube Music, Windows Media Player, browsers, audiobook apps, and more)
 - **Playback controls** — play/pause toggle, skip-next, and skip-back buttons;
-  skip-back is hidden for sources that don't support it
+  skip buttons are always shown but dimmed when not supported by the source
 - **Position timestamp** — shows current position and total duration as
   `M:SS / M:SS` (or `H:MM:SS / H:MM:SS` for long tracks) when the source
   exposes timeline data; hidden automatically when timeline is unavailable
@@ -46,6 +46,13 @@ DPI handling automatically.
 - **Track progress bar** — a slim bar at the widget bottom shows playback
   position; paired with the timestamp display; smoothly interpolated between
   SMTC update ticks for fluid movement
+- **Acrylic background** — frosted-glass backdrop using the system's
+  `AcrylicBrush`; follows the system dark/light theme automatically
+- **Text crossfade** — smooth opacity fade-out/fade-in when the track changes
+- **Widget fade** — smooth opacity animation when the widget appears or
+  disappears (e.g. entering or leaving fullscreen)
+- **Live repositioning** — the panel tracks the system tray width in real time;
+  adding or removing tray icons keeps it correctly positioned
 
 ## Compatibility notes
 
@@ -54,9 +61,9 @@ DPI handling automatically.
   is not available from browser sessions.
 - **Firefox**: media info is fully supported; timeline data is not available
   (Mozilla Bugzilla 1689538).
-- **Audiobook apps**: Libby/OverDrive and similar apps that expose chapter
-  navigation are fully supported. Audible's Windows app does not register
-  SMTC sessions and is not supported.
+- **Audiobook apps**: Libby, Audiobookshelf, and similar apps that expose
+  chapter navigation are fully supported. Audible's native Windows app was
+  discontinued January 2022 and does not register SMTC sessions.
 
 ## Requirements
 
