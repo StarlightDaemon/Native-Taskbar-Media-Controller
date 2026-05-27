@@ -4,7 +4,7 @@
 
 **Status: v1.4.9**
 
-Unlike overlay-based taskbar media mods, this one inserts the widget as a real child element of the taskbar's own XAML tree (`Grid#RootGrid` under `Taskbar.TaskbarFrame`). There is no separate window, no `SetLayeredWindowAttributes`, no GDI painting loop. The widget inherits correct z-ordering, auto-hide handling, and DPI scaling from the taskbar itself.
+Inserts the widget directly into the taskbar's own XAML tree (`Grid#RootGrid` under `Taskbar.TaskbarFrame`). No separate window, no `SetLayeredWindowAttributes`, no GDI painting loop. The widget inherits correct z-ordering, auto-hide handling, and DPI scaling from the taskbar itself.
 
 ## Features
 
