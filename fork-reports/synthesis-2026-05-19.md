@@ -35,31 +35,31 @@
 
 | Feature | Baseline | Messij | memeri121 | Chaython | Uiisland | Hashah-Messij v5 | kevinoe | Cinabutts | 0xjio | Simon | HibritTofas | GR0UD |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Multi-session display | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ (partial) | ✗ | ✗ | ✗ | N/A | ✗ | ✗ |
-| Blurred art background | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ (gradient) | ✓ (theme) |
-| Adaptive text color | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ | ✗ |
-| Seek bar | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✗ | ✗ |
-| Track progress bar | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | N/A | ✓ | ✗ |
-| Auto-hide taskbar fix | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✗ | ✗ |
-| Per-pixel alpha (ULW) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ | N/A | ✗ | ✗ |
-| BringSourceAppToFront | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ | ✗ |
-| Audio visualizer (FFT) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✗ | ✓ |
-| Lyrics (LRC) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ | ✗ |
-| Widget fade animation | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✗ | ✗ |
-| Peak metering (COM) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | N/A | ✗ | ✗ |
-| Per-app volume | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ | ✓ |
-| Fullscreen fix (monitor) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | N/A | ✓ | ✗ |
-| Double-click → app | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ | ✗ |
-| Middle-click → close | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | N/A | ✗ | ✗ |
-| Shuffle/repeat display | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ | ✗ |
-| Mini logo mode | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | N/A | ✓ | ✗ |
-| No-art placeholder icon | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | N/A | ✗ | ✗ |
-| Text crossfade | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | N/A | ✗ | ✓ |
-| Controls off mode | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | N/A | ✗ | ✗ |
-| Persistent position | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | N/A | ✓ | ✗ |
-| Taskbar hook retained | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✓ | ✗ | N/A | ✓ | ✓ |
+| Multi-session display | · | ✅ | · | · | · | 🔶 partial | · | · | · | — | · | · |
+| Blurred art background | · | · | · | · | ✅ | · | · | · | · | — | ✅ gradient | ✅ theme |
+| Adaptive text color | · | · | · | · | ✅ | · | · | · | · | — | ✅ | · |
+| Seek bar | · | · | ✅ | · | · | · | · | · | · | — | · | · |
+| Track progress bar | · | · | · | · | · | · | ✅ | · | · | — | ✅ | · |
+| Auto-hide taskbar fix | · | · | · | ✅ | · | · | · | · | · | — | · | · |
+| Per-pixel alpha (ULW) | · | · | · | · | · | · | ✅ | · | ✅ | — | · | · |
+| BringSourceAppToFront | · | ✅ | · | · | · | · | · | · | · | — | ✅ | · |
+| Audio visualizer (FFT) | · | · | · | · | · | · | · | · | · | — | · | ✅ |
+| Lyrics (LRC) | · | · | · | · | · | · | · | · | · | — | ✅ | · |
+| Widget fade animation | · | · | ✅ | · | · | · | · | · | · | — | · | · |
+| Peak metering (COM) | · | · | · | · | · | · | · | ✅ | · | — | · | · |
+| Per-app volume | · | · | · | · | · | · | · | · | · | — | ✅ | ✅ |
+| Fullscreen fix (monitor) | · | · | · | · | · | · | ✅ | · | · | — | ✅ | · |
+| Double-click → app | · | ✅ | · | · | · | · | · | · | · | — | ✅ | · |
+| Middle-click → close | · | ✅ | · | · | · | ✅ | · | · | · | — | · | · |
+| Shuffle/repeat display | · | · | · | · | · | · | · | · | · | — | ✅ | · |
+| Mini logo mode | · | · | · | · | ✅ | · | · | · | · | — | ✅ | · |
+| No-art placeholder icon | · | · | · | · | ✅ | · | · | · | · | — | · | · |
+| Text crossfade | · | · | · | · | · | · | · | · | · | — | · | ✅ |
+| Controls off mode | · | · | · | · | · | · | · | · | ✅ | — | · | · |
+| Persistent position | · | · | · | · | · | · | · | ✅ | · | — | ✅ | · |
+| Taskbar hook retained | ✅ | ✅ | · | ✅ | ✅ | ✅ | · | ✅ | · | — | ✅ | ✅ |
 
-*(Simon Benedict = N/A throughout; completely different mod domain)*
+*(Simon Benedict = — throughout; completely different mod domain)*
 
 ---
 
@@ -67,7 +67,7 @@
 
 Ordered by signal (Recommended → Consider → Flag), then by fork.
 
-### Recommended
+### 🟢 Recommended
 
 | ID | Title | Class | Fork | Recommended Model |
 |---|---|---|---|---|
@@ -86,7 +86,7 @@ Ordered by signal (Recommended → Consider → Flag), then by fork.
 | SC-HT-2 | GetAlbumPalette (64-bucket color quantization) | TARGETED-PORT | HibritTofas | Gemini 3 Pro (low), Sonnet 4.5 |
 | SC-GR-1 | WASAPI loopback FFT audio visualizer | MULTI-UNIT-INTEGRATION | GR0UD | Gemini 3 Pro (high), Sonnet 4.6 |
 
-### Consider
+### 🟡 Consider
 
 | ID | Title | Class | Fork | Recommended Model |
 |---|---|---|---|---|
@@ -112,7 +112,7 @@ Ordered by signal (Recommended → Consider → Flag), then by fork.
 | SC-GR-3 | WH_CATCH / WH_TRY_OR exception macros | MECHANICAL | GR0UD | Gemini 3 Flash, Haiku 4.5 |
 | SC-GR-4 | MediaCmd enum (typed SendMediaCommand) | MECHANICAL | GR0UD | Gemini 3 Flash, Haiku 4.5 |
 
-### Flag (Operator Decision Required)
+### 🔴 Flag — Operator Decision Required
 
 | ID | Title | Class | Fork | Recommended Model |
 |---|---|---|---|---|
@@ -230,21 +230,21 @@ SC-GR-1 (FFT visualizer) is the highest-value unique feature in the set. However
 
 | Fork | Flag | Severity |
 |---|---|---|
-| Hashah-Messij v5 | `PauseOnMewMediaPlayed` typo in both setting key and struct field | High |
-| Hashah-Messij v5 | MANIFEST duplicate filename conflict (row 13 = row 5 physical file) | Info |
-| Messij | MANIFEST duplicate filename conflict (row 9 = row 3 physical file) | Info |
-| Uiisland | `L"Microsoft YaHei UI"` and `L"暂无媒体播放"` locale-specific; do not port verbatim | Medium |
-| Uiisland | `g_hCapsWindow` not destroyed in WM_DESTROY | Medium |
-| 0xjio | `L"Inter"` font not system-bundled | Medium |
-| HibritTofas | `SaveUIState()`/`LoadUIState()` bypass `Wh_SetStringValue`; use registry API directly | Low |
-| HibritTofas | Spotify-priority session selection not portable to general successor | Medium |
-| memeri121 | Taskbar hook removed; widget cannot reanchor after taskbar move/crash | Medium |
-| kevinoe | Taskbar hook removed | Medium |
-| 0xjio | Taskbar hook removed | Medium |
-| Simon Benedict | Domain mismatch: virtual desktop indicator, not media widget; `.txt` extension | Info |
-| GR0UD | `@include windhawk.exe` — process incompatibility with all other forks; must audit before porting SC-GR-1 | High |
+| Hashah-Messij v5 | `PauseOnMewMediaPlayed` typo in both setting key and struct field | 🔴 High |
+| Hashah-Messij v5 | MANIFEST duplicate filename conflict (row 13 = row 5 physical file) | ℹ️ Info |
+| Messij | MANIFEST duplicate filename conflict (row 9 = row 3 physical file) | ℹ️ Info |
+| Uiisland | `L"Microsoft YaHei UI"` and `L"暂无媒体播放"` locale-specific; do not port verbatim | 🟡 Medium |
+| Uiisland | `g_hCapsWindow` not destroyed in WM_DESTROY | 🟡 Medium |
+| 0xjio | `L"Inter"` font not system-bundled | 🟡 Medium |
+| HibritTofas | `SaveUIState()`/`LoadUIState()` bypass `Wh_SetStringValue`; use registry API directly | 🟢 Low |
+| HibritTofas | Spotify-priority session selection not portable to general successor | 🟡 Medium |
+| memeri121 | Taskbar hook removed; widget cannot reanchor after taskbar move/crash | 🟡 Medium |
+| kevinoe | Taskbar hook removed | 🟡 Medium |
+| 0xjio | Taskbar hook removed | 🟡 Medium |
+| Simon Benedict | Domain mismatch: virtual desktop indicator, not media widget; `.txt` extension | ℹ️ Info |
+| GR0UD | `@include windhawk.exe` — process incompatibility with all other forks; must audit before porting SC-GR-1 | 🔴 High |
 
-No Critical flags. No secrets detected in any fork file.
+✅ No critical flags · ✅ No secrets detected in any fork file
 
 ---
 
