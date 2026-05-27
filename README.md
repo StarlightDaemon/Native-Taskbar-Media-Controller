@@ -2,7 +2,7 @@
 
 > A [Windhawk](https://windhawk.net) mod that injects a native media controller directly into the Windows 11 taskbar.
 
-**Status: v1.4.8**
+**Status: v1.4.9**
 
 Unlike overlay-based taskbar media mods, this one inserts the widget as a real child element of the taskbar's own XAML tree (`Grid#RootGrid` under `Taskbar.TaskbarFrame`). There is no separate window, no `SetLayeredWindowAttributes`, no GDI painting loop. The widget inherits correct z-ordering, auto-hide handling, and DPI scaling from the taskbar itself.
 
