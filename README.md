@@ -64,12 +64,15 @@ Works with any app that registers a Windows GSMTC session. Native apps get full 
 
 ## Roadmap
 
-For the full analysis of feature candidates across 11 community forks, see [`fork-reports/synthesis-2026-05-19.md`](fork-reports/synthesis-2026-05-19.md).
-
 ### Under consideration
 
-- Synchronized LRC lyrics (SC-HT-1)
-- FFT audio visualizer (SC-GR-1)
+- **Synchronized LRC lyrics** — fetch and display time-synced lyrics alongside the now-playing info (SC-HT-1)
+- **FFT audio visualizer** — real-time frequency spectrum rendered inside the panel (SC-GR-1)
+- **Per-app volume control** — adjust the active session's volume directly from the widget (SC-HT-5)
+- **Shuffle / repeat status** — show the current shuffle and repeat mode alongside track info (SC-HT-3)
+- **Display-only mode** — hide playback controls for a minimal title-and-art layout (SC-0X-1)
+
+For the full feature analysis across 11 community forks see the [fork synthesis report](fork-reports/synthesis-2026-05-19.md).
 
 <details>
 <summary>Acknowledgements</summary>
