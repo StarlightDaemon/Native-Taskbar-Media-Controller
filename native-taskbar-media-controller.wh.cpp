@@ -2,7 +2,7 @@
 // @id              native-taskbar-media-controller
 // @name            Native Taskbar Media Controller
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
-// @version         1.4.9
+// @version         1.5.0
 // @author          StarlightDaemon
 // @github          https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller
 // @include         explorer.exe
@@ -1170,12 +1170,25 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int textTop = pad + artSz + MulDiv(8, logPx, 96);
         int textH   = H - textTop - pad;
 
-        // Title — Segoe UI SemiBold 13pt, white
-        HFONT fTitle = CreateFontW(
-            -MulDiv(13, logPx, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HFONT fPrev = (HFONT)SelectObject(hdc, fTitle);
+        // Title — Segoe UI SemiBold, 13pt stepping down to 9pt to fit available width;
+        // DT_END_ELLIPSIS is the final fallback if the text is still too wide at 9pt.
+        int titlePt  = 13;
+        int availW   = W - 2 * pad;
+        HFONT fTitle = nullptr;
+        HFONT fPrev  = nullptr;
+        for (;;) {
+            if (fTitle) { SelectObject(hdc, fPrev); DeleteObject(fTitle); }
+            fTitle = CreateFontW(
+                -MulDiv(titlePt, logPx, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+            fPrev = (HFONT)SelectObject(hdc, fTitle);
+            SIZE sz = {};
+            if (!title.empty())
+                GetTextExtentPoint32W(hdc, title.c_str(), (int)title.size(), &sz);
+            if (sz.cx <= availW || titlePt <= 9) break;
+            --titlePt;
+        }
         SetTextColor(hdc, clrTitle);
         RECT rTitle = { pad, textTop, W - pad, textTop + textH / 2 };
         DrawTextW(hdc, title.c_str(), -1, &rTitle,
