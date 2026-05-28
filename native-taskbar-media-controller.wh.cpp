@@ -4,84 +4,84 @@
 // @description     Native XAML-injected media controller in the Windows 11 taskbar — shows now-playing info with playback controls.
 // @version         1.4.9
 // @author          StarlightDaemon
+// @github          https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lversion -lshell32 -lgdi32 -ldwmapi -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lwindowsapp -lshell32 -lgdi32 -ldwmapi -DWINVER=0x0A00 -Wl,--undefined=__imp_FindWindowW -Wl,--undefined=__imp_FindWindowExW -Wl,--undefined=__imp_PostMessageW -Wl,--undefined=__imp_GetClientRect
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
 /*
 # Native Taskbar Media Controller
 
-Injects a media controller natively into the Windows 11 taskbar XAML tree —
-no overlay window, no separate process. The widget lives as a real child of
-the taskbar's own UI, giving it correct z-ordering, auto-hide support, and
-DPI handling automatically.
+Inserts the widget directly into the taskbar's own XAML tree (`Grid#RootGrid`
+under `Taskbar.TaskbarFrame`). No overlay window, no `SetLayeredWindowAttributes`,
+no GDI painting loop. The widget inherits correct z-ordering, auto-hide handling,
+and DPI scaling from the taskbar itself.
 
 ## Features
 
-- **Now playing** — title and artist from any GSMTC-compatible app (Spotify,
-  YouTube Music, Windows Media Player, browsers, audiobook apps, and more)
-- **Playback controls** — play/pause toggle, skip-next, and skip-back buttons;
-  skip buttons are always shown but dimmed when not supported by the source
-- **Position timestamp** — shows current position and total duration as
-  `M:SS / M:SS` (or `H:MM:SS / H:MM:SS` for long tracks) when the source
-  exposes timeline data; hidden automatically when timeline is unavailable
-- **Multi-session** — a session count chip appears when multiple media apps
-  are active; tap it to cycle between sessions
-- **Audiobook mode** — tracks longer than one hour are treated as audiobooks:
-  skip buttons navigate chapters, and the playback rate is shown next to the
-  title when it differs from 1×
+- **Now playing** — title and artist from any GSMTC-compatible source: Spotify,
+  YouTube Music, Windows Media Player, browsers, audiobook apps, and anything
+  else that registers a media session
+- **Playback controls** — play/pause toggle, skip-next, and skip-back; skip
+  buttons are always shown but dimmed when not supported by the source
 - **Hover flyout** — hovering over the widget shows an expanded panel with
   full-width album art, title, and artist; follows the system dark/light theme
-- **Middle-click to close** — middle-click the widget to stop the active
-  media session
-- **Scrolling title** — long titles marquee-scroll smoothly inside the widget;
-  gated by the "Scroll long titles" setting
-- **Fullscreen auto-hide** — panel collapses when a fullscreen app is
-  detected; also hides when the taskbar slides off-screen in auto-hide mode
-- **Adaptive text color** — text adjusts to light or dark based on the Windows theme
-- **Double-click to focus** — double-click the widget to bring the source
-  media app to the foreground (or minimize it if already focused)
-- **Track progress bar** — a slim bar at the widget bottom shows playback
-  position; paired with the timestamp display; smoothly interpolated between
-  SMTC update ticks for fluid movement
-- **Acrylic background** — frosted-glass backdrop using the system's
-  `AcrylicBrush`; follows the system dark/light theme automatically
-- **Text crossfade** — smooth opacity fade-out/fade-in when the track changes
-- **Widget fade** — smooth opacity animation when the widget appears or
-  disappears (e.g. entering or leaving fullscreen)
-- **Live repositioning** — the panel tracks the system tray width in real time;
-  adding or removing tray icons keeps it correctly positioned
+- **Multi-session** — when multiple media apps are active simultaneously, a
+  session count chip appears in the top-right corner; tap it to cycle through
+  sessions
+- **Audiobook mode** — sessions longer than one hour (or with chapter keywords)
+  are treated as audiobooks: skip buttons navigate chapters and playback speed
+  is shown next to the title
 
-## Compatibility notes
+Also includes: scrolling marquee title, inline album art, track progress bar
+with position/duration timestamp, smooth progress interpolation between SMTC
+ticks, text crossfade on track changes, widget fade animations, acrylic
+frosted-glass background, adaptive text color, fullscreen auto-hide, live
+repositioning as tray icons change, double-click to focus the source app, and
+middle-click to stop the session.
 
-- **Browsers** (Chrome, Edge, Brave, Opera, Vivaldi, Arc, Thorium):
-  one SMTC session per browser process; all tabs share it. Timeline data
-  is not available from browser sessions.
-- **Firefox**: media info is fully supported; timeline data is not available
-  (Mozilla Bugzilla 1689538).
-- **Audiobook apps**: Libby, Audiobookshelf, and similar apps that expose
-  chapter navigation are fully supported. Audible's native Windows app was
-  discontinued January 2022 and does not register SMTC sessions.
+## Compatibility
+
+Works with any app that registers a Windows GSMTC session. Native apps get
+full support; browser sessions have protocol-level limitations that apply
+regardless of which browser is used.
+
+| Source | Timeline | Notes |
+|---|---|---|
+| **Native apps** — Spotify, Apple Music, Amazon Music, Tidal, Deezer, VLC, Windows Media Player, MusicBee, foobar2000, and most other media players | ✓ | Full support — title, artist, album art, and playback controls |
+| **Chromium browsers** — Chrome, Edge, Brave, Opera, Vivaldi, Arc, Thorium | — | One SMTC session per browser process; all open tabs share it |
+| **Firefox** | — | Full title and artist; no timeline data (Mozilla bug 1689538) |
+| **Libby** | — | Runs as a Chrome extension; the mod substitutes an embedded icon since Libby does not expose cover art via SMTC |
+| **Audiobookshelf** | ✓ | Chapter navigation active for sessions over one hour, or when the title contains the word "Chapter" |
+| **Audible Cloud Player** | — | Browser session via Chromium; treated the same as any other browser tab |
 
 ## Requirements
 
-- Windows 11 22H2 or later
+- Windows 11 (22H2 or later recommended)
 - [Windhawk](https://windhawk.net) mod loader
 */
 // ==/WindhawkModReadme==
 
 // ==WindhawkModSettings==
 /*
+- WidgetPosition: Right
+  $name: Widget position
+  $description: "Where on the taskbar the widget appears."
+  $options:
+  - Right: Right — next to clock & tray
+  - Left: Left — taskbar far left
+  - Center: Center — middle of taskbar
+- OffsetX: 8
+  $name: Position offset (px)
+  $description: "Fine-tune placement. Right: gap from the system tray. Left: gap from the left edge. Center: nudge from center (positive = shift right)."
 - PanelWidth: 300
   $name: Widget width (px)
 - PanelHeight: 40
   $name: Widget height (px)
 - FontSize: 11
   $name: Font size
-- OffsetX: 8
-  $name: Gap between widget and system tray (px)
 - HideFullscreen: true
   $name: Hide when fullscreen
 - ShowProgress: true
@@ -187,6 +187,8 @@ using namespace Windows::Graphics::Imaging;
     }()
 
 // ---------- Settings ----------
+enum class WidgetPosition { Right, Left, Center };
+
 struct ModSettings {
     int panelWidth = 300;
     int panelHeight = 40;
@@ -197,6 +199,7 @@ struct ModSettings {
     bool adaptiveTextColor = true;
     bool marqueeScroll = true;
     bool flyoutTransparent = false;
+    WidgetPosition widgetPosition = WidgetPosition::Right;
 } g_Settings;
 
 static void LoadSettings() {
@@ -213,6 +216,14 @@ static void LoadSettings() {
     if (g_Settings.panelHeight  <= 0) g_Settings.panelHeight = 40;
     if (g_Settings.fontSize     <= 0) g_Settings.fontSize = 11;
     if (g_Settings.offsetX      <  0) g_Settings.offsetX = 8;
+    PCWSTR pos = Wh_GetStringSetting(L"WidgetPosition");
+    if (wcscmp(pos, L"Left") == 0)
+        g_Settings.widgetPosition = WidgetPosition::Left;
+    else if (wcscmp(pos, L"Center") == 0)
+        g_Settings.widgetPosition = WidgetPosition::Center;
+    else
+        g_Settings.widgetPosition = WidgetPosition::Right;
+    Wh_FreeStringSetting(pos);
 }
 
 // ---------- GSMTC multi-session state ----------
@@ -756,8 +767,8 @@ static HBITMAP    g_FlyoutArtHBitmap = nullptr;
 static int        g_FlyoutArtBmpW    = 0;
 static int        g_FlyoutArtBmpH    = 0;
 
-// Widget right-margin (trayWidth + offsetX, in DIPs) — updated in UpdateWidgetMargin.
-// Flyout thread reads this to compute its screen position.
+// Right-mode only: trayWidth + offsetX (DIPs). Written by UpdateWidgetMargin(),
+// read by the flyout thread to compute the widget's left screen-X in Right mode.
 static std::atomic<int> g_FlyoutMarginDIPs{ 0 };
 
 // ---------- Helpers ----------
@@ -861,8 +872,11 @@ static SolidColorBrush MakeBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
 static void RefreshWidgetUI();
 static void StartMarqueeIfNeeded(Canvas titleCanvas, TextBlock titleTb);
 
-// Recompute the widget's right margin from the measured system tray width.
-// Called at inject time and whenever the tray resizes.
+// Recompute the widget's margin based on the current position mode.
+// Right: tracks tray width so the widget stays adjacent to the system tray.
+// Left/Center: a fixed margin from the respective edge (no tray dependency).
+// Called at inject time, on tray resize (Right mode only matters, but harmless
+// for other modes), and whenever settings change.
 static void UpdateWidgetMargin() {
     Grid widget{ nullptr };
     FrameworkElement tray{ nullptr };
@@ -873,11 +887,18 @@ static void UpdateWidgetMargin() {
     }
     if (!widget) return;
 
-    double trayWidth = tray ? tray.ActualWidth() : 0.0;
-    double gap       = (double)g_Settings.offsetX;
-    double margin    = trayWidth + gap;
-    widget.Margin(ThicknessHelper::FromLengths(0, 0, margin, 0));
-    g_FlyoutMarginDIPs.store((int)margin);
+    double gap = (double)g_Settings.offsetX;
+    if (g_Settings.widgetPosition == WidgetPosition::Right) {
+        double trayWidth = tray ? tray.ActualWidth() : 0.0;
+        double margin    = trayWidth + gap;
+        widget.Margin(ThicknessHelper::FromLengths(0, 0, margin, 0));
+        g_FlyoutMarginDIPs.store((int)margin);
+    } else {
+        // Left: Margin.Left is a gap from the left edge.
+        // Center: HorizontalAlignment::Center centers the widget; Margin.Left
+        //         nudges it rightward from that center point when offsetX > 0.
+        widget.Margin(ThicknessHelper::FromLengths(gap, 0, 0, 0));
+    }
 }
 
 // ---------- SC-M-2: BringSourceAppToFront — Messij ----------
@@ -1189,13 +1210,24 @@ static LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         HWND tbar = g_hTaskbarWnd.load();
         if (!tbar) return 0;
         RECT tr; GetWindowRect(tbar, &tr);
-        int dpi = GetDpiForWindow(hwnd);
-        // Flyout matches widget width, right-aligned to the widget's right edge.
-        int marginPx  = MulDiv(g_FlyoutMarginDIPs.load(), dpi, 96);
-        int widgetWPx = MulDiv(g_Settings.panelWidth,     dpi, 96);
-        int flyoutH   = MulDiv(kFlyoutHDIPs,              dpi, 96);
-        int x = tr.right - marginPx - widgetWPx;
-        int y = tr.top   - flyoutH  - MulDiv(4, dpi, 96);
+        int dpi       = GetDpiForWindow(hwnd);
+        int widgetWPx = MulDiv(g_Settings.panelWidth, dpi, 96);
+        int flyoutH   = MulDiv(kFlyoutHDIPs,          dpi, 96);
+        int taskbarW  = tr.right - tr.left;
+        int x;
+        switch (g_Settings.widgetPosition) {
+        case WidgetPosition::Left:
+            x = tr.left + MulDiv(g_Settings.offsetX, dpi, 96);
+            break;
+        case WidgetPosition::Center:
+            x = tr.left + (taskbarW - widgetWPx) / 2
+                        + MulDiv(g_Settings.offsetX, dpi, 96);
+            break;
+        default: // Right
+            x = tr.right - MulDiv(g_FlyoutMarginDIPs.load(), dpi, 96) - widgetWPx;
+            break;
+        }
+        int y = tr.top - flyoutH - MulDiv(4, dpi, 96);
         SetWindowPos(hwnd, HWND_TOPMOST, x, y, widgetWPx, flyoutH,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
         InvalidateRect(hwnd, nullptr, TRUE);
@@ -1263,7 +1295,10 @@ static Grid BuildWidget() {
     Grid root;
     root.Name(kWidgetRootName);
     root.Width((double)g_Settings.panelWidth);
-    root.HorizontalAlignment(HorizontalAlignment::Right);
+    root.HorizontalAlignment(
+        g_Settings.widgetPosition == WidgetPosition::Left   ? HorizontalAlignment::Left   :
+        g_Settings.widgetPosition == WidgetPosition::Center ? HorizontalAlignment::Center :
+                                                              HorizontalAlignment::Right);
     root.VerticalAlignment(VerticalAlignment::Stretch);
     // Background (Acrylic) is applied on first call to ApplyStateToWidget().
     root.CornerRadius(CornerRadiusHelper::FromUniformRadius(8.0));
@@ -1271,7 +1306,7 @@ static Grid BuildWidget() {
     // Span all columns so right-alignment is relative to full taskbar width.
     Grid::SetColumnSpan(root, 9999);
     Grid::SetRowSpan(root, 9999);
-    // Margin.Right is set dynamically via UpdateWidgetMargin() once tray width is known.
+    // Margin is set dynamically via UpdateWidgetMargin() based on the position mode.
 
     Grid layout;
     layout.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -2200,15 +2235,17 @@ static void InjectWidgetInto(Grid rootGrid) {
     }
     g_hTaskbarWnd.store(FindWindowW(L"Shell_TrayWnd", nullptr));
 
-    // Subscribe to tray resize to keep margin accurate when icon count changes.
-    if (tray) {
+    // In Right mode the widget must stay adjacent to the system tray, so
+    // subscribe to tray resize to update the margin whenever icon count changes.
+    // Left and Center modes use a fixed offset unrelated to tray width.
+    if (tray && g_Settings.widgetPosition == WidgetPosition::Right) {
         g_TrayResizeToken = tray.SizeChanged(
             [](IInspectable const&, SizeChangedEventArgs const&) {
                 UpdateWidgetMargin();
             });
     }
 
-    UpdateWidgetMargin();  // set initial Margin.Right = trayWidth + gap
+    UpdateWidgetMargin();  // set initial margin
     // Re-run once the first layout pass completes so ActualWidth() is valid.
     widget.Loaded([](IInspectable const&, RoutedEventArgs const&) {
         UpdateWidgetMargin();
@@ -3006,12 +3043,17 @@ void Wh_ModSettingsChanged() {
         auto weak = make_weak(widget);
         int w = g_Settings.panelWidth, h = g_Settings.panelHeight;
         double fs = g_Settings.fontSize;
+        HorizontalAlignment ha =
+            g_Settings.widgetPosition == WidgetPosition::Left   ? HorizontalAlignment::Left   :
+            g_Settings.widgetPosition == WidgetPosition::Center ? HorizontalAlignment::Center :
+                                                                  HorizontalAlignment::Right;
         widget.Dispatcher().RunAsync(
             Windows::UI::Core::CoreDispatcherPriority::Normal,
-            [weak, w, h, fs]() {
+            [weak, w, h, fs, ha]() {
                 auto g = weak.get();
                 if (!g) return;
                 g.Width((double)w);
+                g.HorizontalAlignment(ha);
                 if (auto art = FindByName<Image>(g, kAlbumArtName)) {
                     art.Width((double)h);
                     art.Height((double)h);
