@@ -72,7 +72,7 @@ Works with any app that registers a Windows GSMTC session. Native apps get full 
 - **Shuffle / repeat status** — show the current shuffle and repeat mode alongside track info (SC-HT-3)
 - **Display-only mode** — hide playback controls for a minimal title-and-art layout (SC-0X-1)
 
-For the full feature analysis across 11 community forks see the [fork synthesis report](fork-reports/synthesis-2026-05-19.md).
+For the full feature analysis across 11 community forks see the [fork synthesis report](docs/fork-reports/synthesis-2026-05-19.md).
 
 <details>
 <summary>Acknowledgements</summary>

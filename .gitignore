@@ -40,3 +40,6 @@ ehthumbs.db
 
 # Diagnostic probes
 check_xaml.cpp
+
+# Fork source snapshots (reference material kept locally, not redistributed)
+forks/
