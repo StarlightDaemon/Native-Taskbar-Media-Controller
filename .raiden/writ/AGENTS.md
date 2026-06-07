@@ -51,7 +51,7 @@ Read only the subtree relevant to the task beyond step 2.
 
 RAIDEN tooling lives in the **RAIDEN central repo**, not in this repo.
 
-**Central repo path (this machine):** `/mnt/e/Raiden/`
+**Central repo path (this machine):** `/Users/dante/Citadel/Raiden/`
 
 Do not attempt to invoke RAIDEN tooling from within this repo.
 All updater operations targeting this Instance are run from the central repo,
@@ -59,7 +59,7 @@ with this repo supplied as the `--instance` or `--target` argument.
 
 ### `raiden_guide.py` — operator-facing wrapper
 
-Run from the RAIDEN repo root (`/mnt/e/Raiden/`):
+Run from the RAIDEN repo root (`/Users/dante/Citadel/Raiden/`):
 
 ```
 python3 toolkit/guide/raiden_guide.py steps

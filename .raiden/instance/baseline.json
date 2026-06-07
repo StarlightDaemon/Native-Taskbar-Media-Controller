@@ -1,6 +1,6 @@
 {
-  "installed_edict_version": "0.6.0",
-  "installed_at": "2026-06-04T18:41:52.600479+00:00",
+  "installed_edict_version": "0.6.1",
+  "installed_at": "2026-06-07T00:00:00.000000+00:00",
   "managed_files": [
     {
       "path": "README.md",
@@ -24,7 +24,7 @@
     },
     {
       "path": "AGENTS.md",
-      "hash": "6e3d3611b2c3b77cf3dabcbb35455e30771bea87fd72f2cfc5fa95f55f48d06a"
+      "hash": "840926935a28ac9502501b1390c0991fa3cfafe04e2119aa38ea263a606223fb"
     }
   ]
 }
