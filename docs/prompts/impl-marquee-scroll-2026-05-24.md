@@ -347,4 +347,4 @@ After implementing, check:
 
 ## File to edit
 
-`/mnt/e/native-taskbar-media-controller/native-taskbar-media-controller.wh.cpp`
+`/Users/dante/Citadel/native-taskbar-media-controller/native-taskbar-media-controller.wh.cpp`

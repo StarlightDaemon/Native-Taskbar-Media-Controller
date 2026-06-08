@@ -7,7 +7,7 @@ media widget natively into the Windows 11 taskbar XAML tree. Phase 1 deliverable
 **working skeleton only** — injection proven, GSMTC connected, real data visible, multi-session
 architecture in place. No polish, no flyout, no seek bar, no album art yet.
 
-Output file: `/mnt/e/Media Widget/taskbar-media-widget.wh.cpp`
+Output file: `/Users/dante/Citadel/native-taskbar-media-controller/taskbar-media-widget.wh.cpp`
 
 Do not modify any file under `/forks/`. Do not modify the existing
 `taskbar-music-lounge-ae.wh.cpp`. The new file is a clean parallel build.
@@ -246,11 +246,11 @@ The skeleton is complete when ALL of the following are true:
 
 ## Reference Files (read-only, do not modify)
 
-- Baseline mod: `/mnt/e/Media Widget/forks/og_Hashah2311_taskbar-music-lounge.wh/og_Hashah2311_taskbar-music-lounge.wh.cpp`
+- Baseline mod: `/Users/dante/Citadel/native-taskbar-media-controller/forks/og_Hashah2311_taskbar-music-lounge.wh/og_Hashah2311_taskbar-music-lounge.wh.cpp`
   — reference for GSMTC consumption pattern and settings schema conventions
-- Messij's multi-session fork: `/mnt/e/Media Widget/forks/messij/taskbar-music-lounge-multiple/mod.wh.cpp`
+- Messij's multi-session fork: `/Users/dante/Citadel/native-taskbar-media-controller/forks/messij/taskbar-music-lounge-multiple/mod.wh.cpp`
   — reference for `g_MediaStates[]` array pattern and session enumeration
-- Synthesis report: `/mnt/e/Media Widget/fork-reports/synthesis-2026-05-19.md`
+- Synthesis report: `/Users/dante/Citadel/native-taskbar-media-controller/fork-reports/synthesis-2026-05-19.md`
   — full candidate list and conflict notes; consult if unsure about a design choice
 - bbmaster123 scaffold: fetch from URL above before starting; do not commit it to the repo
 
