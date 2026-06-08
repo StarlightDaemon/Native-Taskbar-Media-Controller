@@ -1,5 +1,13 @@
 # Current State
 
+## Migration Remediation — Complete (2026-06-07)
+
+WSL→macOS path migration audit resolved. Edict v0.6.1 confirmed clean.
+All four P1–P4 findings fixed and pushed (`7a91ec3` on `main`).
+No open migration debt remains; see OL-11 in OPEN_LOOPS.md.
+
+---
+
 ## v1.4.8 — Committed (2026-05-25)
 
 File: `native-taskbar-media-controller.wh.cpp`  

@@ -1,5 +1,15 @@
 # Open Loops
 
+## ~~OL-11: WSL→macOS migration remediation~~ CLOSED (2026-06-07)
+
+Migration audit completed 2026-06-07 (Edict v0.6.1 confirmed clean). All four
+findings resolved in commit `7a91ec3`:
+- **P1** — `.git/hooks/commit-msg` chmod +x (was 666, execute bit missing)
+- **P2** — `AGENTS.md` L26: `/mnt/e/Raiden/` → `/Users/dante/Citadel/Raiden/`
+- **P3** — `docs/audit-reports/` (2 files): repo path WSL→macOS
+- **P4** — `docs/prompts/` (2 files): all `/mnt/e/` paths WSL→macOS
+Global `/mnt/e/` scan clean post-remediation.
+
 ## ~~OL-10: Marquee scroll live test~~ CLOSED (deferred to post-v1.0.0)
 
 Implementation shipped in beta.5. Live test deferred — v1.0.0 shipped without
