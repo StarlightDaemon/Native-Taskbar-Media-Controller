@@ -28,9 +28,9 @@ This Edict is canonical under RAIDEN's authority order. It is installed into `.r
 
 ## Model Expectation
 
-The fork review requires a model capable of precise diff reasoning, change-level attribution across multiple files, cross-fork synthesis judgment, and a speculative observations pass. Current preference: Claude Sonnet 4.6 with extended thinking. Fallback order: Claude Opus 4.7 (thinking), Gemini 3 Pro (high).
+The fork review requires a model capable of precise diff reasoning, change-level attribution across multiple files, cross-fork synthesis judgment, and a speculative observations pass. Route to **TIER_DEEP_REASONING** (see `MODEL_TIERS.md`); if that tier's model is unavailable, fall back to **TIER_FALLBACK**.
 
-Per-Instance routing config may override this preference; see Synthesis Routing for routing-config lookup.
+Per-Instance routing config may override this preference; see Synthesis Routing for routing-config lookup. Tiers resolve to concrete models through the operator's local mapping (`.raiden/local/MODEL_MAP.md`).
 
 ## Hard Constraints
 
@@ -163,15 +163,15 @@ If a scoped routing config exists (`.raiden/routing.md`, `.raiden/models.md`, `.
 
 ### Step 2: For candidates not covered by scoped config, classify by class
 
-| Class | Description | Default tier — exemplars |
+| Class | Description | Default capability tier |
 |---|---|---|
-| MECHANICAL | Direct port of a self-contained change with no judgment required (new constant, settings field, isolated helper) | Fast — Gemini 3 Flash, Claude Haiku 4.5 |
-| TARGETED-PORT | Bounded change in 1–2 functions requiring light adaptation (behavioral tweak, patched logic) | Mid — Gemini 3 Pro (low), Sonnet 4.5 |
-| MULTI-UNIT-INTEGRATION | Coordinated changes across multiple functions or structural areas | High — Gemini 3 Pro (high), Sonnet 4.6 |
-| CONFLICT-RESOLUTION | Requires operator-informed judgment to resolve competing fork implementations before porting | Top + thinking — Sonnet 4.6 (thinking), Opus 4.7 (thinking) |
-| SPECULATIVE-TRIAGE | First decide whether the change is worth porting; two-stage (triage → class-appropriate port if confirmed) | Top + thinking — Opus 4.7 (thinking), Sonnet 4.6 (thinking) |
+| MECHANICAL | Direct port of a self-contained change with no judgment required (new constant, settings field, isolated helper) | TIER_FAST_EXECUTION |
+| TARGETED-PORT | Bounded change in 1–2 functions requiring light adaptation (behavioral tweak, patched logic) | TIER_FALLBACK |
+| MULTI-UNIT-INTEGRATION | Coordinated changes across multiple functions or structural areas | TIER_LONG_CONTEXT_REVIEW |
+| CONFLICT-RESOLUTION | Requires operator-informed judgment to resolve competing fork implementations before porting | TIER_DEEP_REASONING |
+| SPECULATIVE-TRIAGE | First decide whether the change is worth porting; two-stage (triage → class-appropriate port if confirmed) | TIER_DEEP_REASONING |
 
-When in doubt between two classes, the more cautious (higher-tier) class wins.
+Tiers are defined in `MODEL_TIERS.md` and resolved to concrete models through the operator's local mapping (`.raiden/local/MODEL_MAP.md`). When in doubt between two classes, the more cautious class wins — prefer TIER_DEEP_REASONING over TIER_FALLBACK, and TIER_FALLBACK over TIER_FAST_EXECUTION.
 
 ### Step 3: Write a synthesis seed
 

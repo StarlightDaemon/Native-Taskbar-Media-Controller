@@ -47,30 +47,38 @@ Read only the subtree relevant to the task beyond step 2.
 
 ---
 
+## Memory Precedence (D-0041)
+
+The `.raiden/state/` files read above are the **system of record** for project
+truth in this Instance. Native per-project memory (host- and user-scoped) holds
+operator and host preferences only.
+
+When native memory and RAIDEN's committed state disagree on any project fact,
+**RAIDEN state wins.** Do not record durable project facts solely into native
+memory; any project fact worth retaining is written to `.raiden/state/` in the
+same pass. Native memory is invisible to other operators, hosts, and models —
+committed state travels with the repo to whatever reads it next.
+
+---
+
 ## RAIDEN Tooling — Where It Lives
 
 RAIDEN tooling lives in the **RAIDEN central repo**, not in this repo.
 
-**Central repo path (this machine):** `/Users/dante/Citadel/Raiden/`
+The central framework path is operator-specific and is not carried in any
+managed file. Per-Instance install facts live in `.raiden/instance/metadata.json`;
+if your workflows need the central repo location recorded, store it in
+`.raiden/local/` (overlay), not here.
 
 Do not attempt to invoke RAIDEN tooling from within this repo.
 All updater operations targeting this Instance are run from the central repo,
 with this repo supplied as the `--instance` or `--target` argument.
 
-### `raiden_guide.py` — operator-facing wrapper
+### Installation
 
-Run from the RAIDEN repo root (`/Users/dante/Citadel/Raiden/`):
-
-```
-python3 toolkit/guide/raiden_guide.py steps
-python3 toolkit/guide/raiden_guide.py init    --target <this-repo-path> [--force]
-python3 toolkit/guide/raiden_guide.py install --target <this-repo-path> --package <path> [--apply]
-python3 toolkit/guide/raiden_guide.py doctor  --target <this-repo-path>
-```
-
-- `init` — creates the `.raiden/` skeleton in a target repo
-- `install` — runs `plan`; with `--apply` also runs `apply`
-- `doctor` — checks instance shape and reports anomalies
+RAIDEN Instances are installed by a RAIDEN central agent following
+`toolkit/edict/AGENT_INSTALL.md` in the central repo. The agent writes all
+files directly; `plan` is the post-install verification authority.
 
 ### `raiden_updater` CLI — direct package surface
 
@@ -86,7 +94,7 @@ python3 -m raiden_updater.cli apply --instance <this-repo-path> --package <path>
 
 ### Edict package location
 
-Current Edict package (fixture): `toolkit/updater/fixtures/sample_package/` in the central repo.
+Canonical Edict package: `toolkit/edict/package/` in the central repo.
 Payload files install to `.raiden/writ/` in this Instance.
 
 ### Plan block reasons (exits 1)
@@ -166,8 +174,8 @@ Files installed by the current Writ under `.raiden/writ/`:
 | File | Purpose |
 |---|---|
 | `README.md` | Writ managed-core index |
-| `OPERATING_RULES.md` | Core operating rules and commit attribution policy |
-| `OWNERSHIP_BOUNDARY.md` | Managed/local boundary definition |
+| `OPERATING_RULES.md` | Core operating rules, ownership boundary, Report-and-Hold, commit attribution |
+| `MODEL_TIERS.md` | Capability-tier semantics referenced by the protocols |
 | `WORKSPACE_AUDIT_PROTOCOL.md` | Workspace audit specification |
 | `FORK_REVIEW_PROTOCOL.md` | Fork review protocol |
 | `AGENTS.md` | This file — full agent guide |

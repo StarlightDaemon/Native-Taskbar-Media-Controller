@@ -29,9 +29,9 @@ This Edict is canonical under RAIDEN's authority order. It is installed into `.r
 
 ## Model expectation
 
-The audit requires a model capable of severity judgment, Raiden-doc cross-referencing, and a speculative observations pass. Current preference: Claude Sonnet 4.6 with extended thinking. Fallback order: Claude Opus 4.7 (thinking), Gemini 3 Pro (high).
+The audit requires a model capable of severity judgment, Raiden-doc cross-referencing, and a speculative observations pass. Route to **TIER_DEEP_REASONING** (see `MODEL_TIERS.md`); if that tier's model is unavailable, fall back to **TIER_FALLBACK**.
 
-Per-Instance routing config may override this preference; see Remediation Routing for routing-config lookup.
+Per-Instance routing config may override this preference; see Remediation Routing for routing-config lookup. Tiers resolve to concrete models through the operator's local mapping (`.raiden/local/MODEL_MAP.md`).
 
 ## Hard Constraints
 
@@ -134,17 +134,17 @@ If a scoped routing config exists (`.raiden/routing.md`, `.raiden/models.md`, `.
 
 ### Step 2: For findings not covered by scoped config, classify by class
 
-| Class | Description | Default tier — exemplars |
+| Class | Description | Default capability tier |
 |---|---|---|
-| MECHANICAL | Deterministic edit, no judgment (version bump, `.gitignore` line, license field) | Fast — Gemini 3 Flash, Claude Haiku 4.5, GPT-5.1-Codex-Mini |
-| TARGETED-FIX | Bounded change, 1–2 files (broken link, single-function bug, stale TODO triage) | Mid — Gemini 3 Pro (low), Codex-Mini, Sonnet 4.5 |
-| MULTI-FILE-REFACTOR | Coordinated changes across many files (rename, API migration, structural reorg) | High — Gemini 3 Pro (high), GPT-5.2-Codex, Sonnet 4.6 |
-| SECURITY-CRITICAL | Careful review required (CVE remediation, credential rotation, auth/crypto, history rewrite) | Top + thinking — Sonnet 4.6 (thinking), Opus 4.7 (thinking), GPT-5.3-Codex (high) |
-| CONFIG/CI | Workflows, build config, scripts; validation-oriented | Mid — GPT-5.1-Codex-Max, Sonnet 4.5, Gemini 3 Pro (low) |
-| DOC-EDIT | README, markdown, comments only | Fast — Gemini 3 Flash, Haiku 4.5 |
-| SPECULATIVE-TRIAGE | First decide whether to act; two-stage (triage → class-appropriate remediation if confirmed real) | Top + thinking — Opus 4.7 (thinking), Sonnet 4.6 (thinking) |
+| MECHANICAL | Deterministic edit, no judgment (version bump, `.gitignore` line, license field) | TIER_FAST_EXECUTION |
+| TARGETED-FIX | Bounded change, 1–2 files (broken link, single-function bug, stale TODO triage) | TIER_FALLBACK |
+| MULTI-FILE-REFACTOR | Coordinated changes across many files (rename, API migration, structural reorg) | TIER_LONG_CONTEXT_REVIEW |
+| SECURITY-CRITICAL | Careful review required (CVE remediation, credential rotation, auth/crypto, history rewrite) | TIER_DEEP_REASONING |
+| CONFIG/CI | Workflows, build config, scripts; validation-oriented | TIER_FALLBACK |
+| DOC-EDIT | README, markdown, comments only | TIER_FAST_EXECUTION |
+| SPECULATIVE-TRIAGE | First decide whether to act; two-stage (triage → class-appropriate remediation if confirmed real) | TIER_DEEP_REASONING |
 
-When in doubt between two classes, the more cautious (higher-tier) class wins.
+Tiers are defined in `MODEL_TIERS.md` and resolved to concrete models through the operator's local mapping (`.raiden/local/MODEL_MAP.md`). When in doubt between two classes, the more cautious class wins — prefer TIER_DEEP_REASONING over TIER_FALLBACK, and TIER_FALLBACK over TIER_FAST_EXECUTION.
 
 ### Step 3: Write a remediation seed
 

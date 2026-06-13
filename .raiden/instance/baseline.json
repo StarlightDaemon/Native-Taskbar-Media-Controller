@@ -1,30 +1,30 @@
 {
-  "installed_edict_version": "0.6.1",
-  "installed_at": "2026-06-07T00:00:00.000000+00:00",
+  "installed_edict_version": "1.0.0",
+  "installed_at": "2026-06-13T04:18:34.101503+00:00",
   "managed_files": [
     {
       "path": "README.md",
-      "hash": "91c4eb47d39c5e919e0bfb5ade45b47973f5f976a1bf51f681a7a1a66b751fa9"
+      "hash": "1103963b0973603701de8c196fc5f9afa9f6d869c9cd6a04c12539166bc736bc"
     },
     {
       "path": "OPERATING_RULES.md",
-      "hash": "1b201b32e4bbf9d98a7ef1293082cdbff0ea6826fc0552db6c5c24cd3e1ce84b"
+      "hash": "4c1879f827e9a6af7969d3cd45d2cbb60c2e3cf26de57b30a8c86955a49fd039"
     },
     {
-      "path": "OWNERSHIP_BOUNDARY.md",
-      "hash": "e203b5afde0afdc22889803dce2f51c570d7bdb2089581c4d7f5e3fe85e06de0"
+      "path": "MODEL_TIERS.md",
+      "hash": "00879028285e5647de3d10089a63b2a6adf6740878c52f8e14af1f66e763f6f0"
     },
     {
       "path": "WORKSPACE_AUDIT_PROTOCOL.md",
-      "hash": "1fa98a0ab068349d71556b142d433fe52462de0cca237d773e4e3dc2ad5bdbb0"
+      "hash": "db0f2ef3352235d207c427a457752ca3e72259fcc4812fb9a356241694a67abf"
     },
     {
       "path": "FORK_REVIEW_PROTOCOL.md",
-      "hash": "d74579048c32e4d727e02a89e2eef9adf79c114026541b05cee63259db5667d5"
+      "hash": "4bf4da56e057783049c133af6c61a1f184e77e71561c8f8aa045a3738769b174"
     },
     {
       "path": "AGENTS.md",
-      "hash": "840926935a28ac9502501b1390c0991fa3cfafe04e2119aa38ea263a606223fb"
+      "hash": "357cf8a22c2019ba6b773531346f8ab57ff52d82500e733648d457c5c9a1e150"
     }
   ]
 }
