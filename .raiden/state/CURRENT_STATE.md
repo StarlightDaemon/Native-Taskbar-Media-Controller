@@ -8,15 +8,37 @@ No open migration debt remains; see OL-11 in OPEN_LOOPS.md.
 
 ---
 
-## v1.4.8 — Committed (2026-05-25)
+## v1.5.0 — Released (2026-06-24)
+
+File: `native-taskbar-media-controller.wh.cpp`
+Version: `1.5.0`
+GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller
+Release tag: `v1.5.0` (2026-06-24, commit `59e2a37`)
+
+**Branch state:**
+- `main` — v1.5.0 tagged and pushed at `59e2a37`
+
+**New features (97096a7 + ffd5ba7):**
+
+- **Widget position setting** — `WidgetPosition` dropdown (Right / Left / Center) added as the first setting in the Windhawk UI. `BuildWidget()` picks `HorizontalAlignment` from the mode at construction; `Wh_ModSettingsChanged()` applies it live. `UpdateWidgetMargin()` branches per mode: Right tracks tray width + updates `g_FlyoutMarginDIPs`; Left/Center apply a fixed `Margin.Left = offsetX`. Flyout `WM_FLYOUT_SHOW` computes screen-x per mode using the taskbar RECT. Tray `SizeChanged` subscription is gated to Right mode only. `OffsetX` meaning adapts: gap from tray (Right), gap from left edge (Left), nudge from center (Center, positive shifts right). Settings block reordered: `WidgetPosition` + `OffsetX` promoted to top.
+- **Dynamic flyout title font sizing** — flyout title steps down from 13pt to 9pt (1pt at a time) until the rendered `GetTextExtentPoint32W` width fits the available area; `DT_END_ELLIPSIS` is the final fallback if the text is still too wide at 9pt. Replaces the previous fixed 13pt `CreateFontW` call.
+
+**Audit-cycle remediation (2026-06-24):**
+
+- **F2a — `g_TrayResizeToken` not revoked on uninit** (`aaf3e4a`): `RemoveWidget` now revokes `g_TrayResizeToken` before the widget is detached, closing the unrevoked-subscription teardown gap flagged in the 2026-06-24 audit.
+- **F2b — Detached `InitialScan` and `PollForDll` threads never joined in `Wh_ModUninit`** (`59e2a37`): both threads are now joined in `Wh_ModUninit`, preventing use-after-free on hot unload.
+
+---
+
+## v1.4.8 — Released (2026-05-25)
 
 File: `native-taskbar-media-controller.wh.cpp`  
 Version: `1.4.8`  
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller  
-Latest release tag: `v1.4.7` (2026-05-25) — v1.4.8 local, pending tag + push
+Latest release tag: `v1.4.8` (2026-05-25) — superseded by v1.4.9
 
 **Branch state:**
-- `main` — v1.4.8 committed; awaiting tag + push
+- `main` — v1.4.8 released; v1.4.9 followed
 
 **What works:**
 - Native XAML injection into `Grid#RootGrid` under `Taskbar.TaskbarFrame` (no overlay window)

@@ -4,6 +4,19 @@ This file is append-only. Each entry is prepended to the top of the entries sect
 
 ---
 
+## 2026-06-24 (commit audited: 13f0daf; HEAD after remediation: 59e2a37, branch main)
+
+- Findings: Critical 0 | High 0 | Medium 8 | Low 12 | Info 15
+- Dominant theme: release and state-doc drift (F1 group) — source
+  advanced to v1.5.0 with two features untagged and all state docs
+  frozen at v1.4.8; root cause for six of the eight Medium findings
+- Completed this cycle: F2a (g_TrayResizeToken uninit revocation,
+  aaf3e4a) and F2b (detached thread joins in Wh_ModUninit, 59e2a37);
+  v1.5.0 tagged at 59e2a37
+- Report: .audits/audit-2026-06-24-13f0daf.md
+- Remaining: P3 doc sync (in progress), P4 scope ledger, P5 git
+  hygiene, P6 housekeeping, P7 deferred refactor
+
 ## 2026-05-25 (commit c1fb551, branch main)
 
 - Findings: Critical 0 | High 0 | Medium 3 | Low 2 | Info 3

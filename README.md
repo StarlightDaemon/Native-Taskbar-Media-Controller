@@ -2,7 +2,7 @@
 
 > A [Windhawk](https://windhawk.net) mod that injects a native media controller directly into the Windows 11 taskbar.
 
-**Status: v1.4.9**
+**Status: v1.5.0**
 
 Inserts the widget directly into the taskbar's own XAML tree (`Grid#RootGrid` under `Taskbar.TaskbarFrame`). No separate window, no `SetLayeredWindowAttributes`, no GDI painting loop. The widget inherits correct z-ordering, auto-hide handling, and DPI scaling from the taskbar itself.
 
@@ -50,10 +50,11 @@ Works with any app that registers a Windows GSMTC session. Native apps get full 
 
 | Setting | Default | Description |
 |---|---|---|
+| Widget position | Right | Where the widget appears on the taskbar. Options: Right (next to clock and tray), Left (taskbar far left), Center (middle of taskbar) |
 | Widget width (px) | 300 | Width of the media panel |
 | Widget height (px) | 40 | Height — should be slightly less than your taskbar height |
 | Font size | 11 | Font size for title and artist text |
-| Gap from tray (px) | 8 | Horizontal gap between the widget and the system tray |
+| Position offset (px) | 8 | Fine-tune placement. Right: gap from the system tray. Left: gap from the left edge. Center: nudge from center (positive shifts right) |
 | Hide when fullscreen | true | Collapses the panel when a fullscreen or presentation state is detected |
 | Show track progress bar and timestamp | true | Enables the slim progress bar and position/duration display; hidden automatically when the source doesn't expose timeline data |
 | Adaptive text color | true | Follows the Windows light/dark theme for text and button colors |
@@ -70,7 +71,6 @@ Works with any app that registers a Windows GSMTC session. Native apps get full 
 - **FFT audio visualizer** — real-time frequency spectrum rendered inside the panel (SC-GR-1)
 - **Per-app volume control** — adjust the active session's volume directly from the widget (SC-HT-5)
 - **Shuffle / repeat status** — show the current shuffle and repeat mode alongside track info (SC-HT-3)
-- **Display-only mode** — hide playback controls for a minimal title-and-art layout (SC-0X-1)
 
 For the full feature analysis across 11 community forks see the [fork synthesis report](docs/fork-reports/synthesis-2026-05-19.md).
 

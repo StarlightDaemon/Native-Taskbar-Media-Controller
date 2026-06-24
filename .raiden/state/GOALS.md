@@ -12,7 +12,7 @@ Build a native XAML-injected Windhawk mod that adds a media controller to the Wi
 | Phase 1: XAML skeleton + GSMTC | Complete | main (merged from feature/rename-to-native-controller) |
 | Phase 2: Feature additions | Complete | main |
 | Phase 3: Background theming | Complete → Simplified | main (Chameleon/BlurredArt shipped then removed; Acrylic retained) |
-| Post-release: v1.0.x–v1.4.8 | Complete | main — latest tag v1.4.7, v1.4.8 pending |
+| Post-release: v1.0.x–v1.5.0 | Complete | main — latest tag v1.5.0 |
 
 ## Post-v1.4.8 Candidates
 

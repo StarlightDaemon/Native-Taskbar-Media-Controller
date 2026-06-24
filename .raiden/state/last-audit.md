@@ -1,11 +1,15 @@
 # Last Workspace Audit
 
-- Date: 2026-05-25
-- Commit: c1fb551
-- Branch: main
-- Report: audit-reports/audit-2026-05-25-c1fb551.md
-- Findings: Critical 0 | High 0 | Medium 3 | Low 2 | Info 3
+- Date: 2026-06-24
+- Commit audited: 13f0daf (branch main at time of audit)
+- Current HEAD: 59e2a37
+- Report: .audits/audit-2026-06-24-13f0daf.md
+- Findings: Critical 0 | High 0 | Medium 8 | Low 12 | Info 15
 - Top 3 priorities:
-  1. Update `==WindhawkModReadme==` in source file — missing hover flyout, middle-click, crossfade, widget fade, smooth progress (requires new work)
-  2. Commit working tree doc refresh (CURRENT_STATE, README, GOALS already corrected) and code hardening (atomic g_FlyoutHwnd, UnregisterClassW, threading fix)
-  3. Fix `last-audit.md` malformed report path before committing, then tag and push v1.4.8
+  1. P3 state and doc sync — README, CURRENT_STATE.md, GOALS.md,
+     AUDIT_LOG.md out of sync with v1.5.0 release (F1a/F1c/F1d/F1e/
+     F3a/F1f) — in progress this session
+  2. P4 scope ledger — register or retire SC-HT-5 and SC-HT-3 from
+     README roadmap; populate DECISIONS.md (F3b/F3c)
+  3. P5 git and ignore hygiene — add .claude to repo .gitignore;
+     prune stale feature/rename-to-native-controller branch (F4/F5)
