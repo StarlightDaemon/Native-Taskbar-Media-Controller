@@ -2336,6 +2336,11 @@ static void RemoveWidget() {
                     }
                     g_TitleSizeChangedToken = {};
                 }
+                if (g_TrayResizeToken.value) {
+                    if (auto tray = g_SystemTray.get())
+                        try { tray.SizeChanged(g_TrayResizeToken); } catch (...) {}
+                    g_TrayResizeToken = {};
+                }
                 if (HWND fly = g_FlyoutHwnd.load())
                     PostMessageW(fly, WM_FLYOUT_HIDE_NOW, 0, 0);
                 auto g = weakGrid.get();
