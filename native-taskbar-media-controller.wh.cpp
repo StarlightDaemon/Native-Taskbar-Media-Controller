@@ -736,6 +736,8 @@ static bool                 g_WidgetFadeTargetVisible = false;
 static winrt::event_token   g_TitleSizeChangedToken{};
 static HANDLE g_PollThread = nullptr;
 static HANDLE g_PollStop = nullptr;
+static std::thread g_PollForDllThread;
+static std::thread g_InitialScanThread;
 static std::atomic<HWND> g_hTaskbarWnd{ nullptr };
 static DispatcherTimer      g_ProgressTimer{ nullptr };
 static ULONGLONG            g_ProgressLastTickMs = 0;
@@ -2849,7 +2851,7 @@ static bool HookTaskbarViewDllSymbols(HMODULE module) {
 // Post WM_SIZE to Shell_TrayWnd (and secondary bars) to trigger UpdateVisualStates
 // without waiting for user interaction. Called after hooks are applied.
 static void TriggerInitialScan() {
-    std::thread([]() {
+    g_InitialScanThread = std::thread([]() {
         // Poll up to 30 s for Shell_TrayWnd. This does two things:
         // 1. Delays the WM_SIZE injection trigger until the taskbar exists.
         // 2. Delays GSMTC initialization until the shell — and the WinRT media
@@ -2878,7 +2880,7 @@ static void TriggerInitialScan() {
         }
         // Signal the GSMTC thread only after the shell is ready.
         if (HANDLE ev = g_GsmtcStartEvent.load()) SetEvent(ev);
-    }).detach();
+    });
 }
 
 // Polls for Taskbar.View.dll (or ExplorerExtensions.dll on older builds) every
@@ -2888,7 +2890,7 @@ static void TriggerInitialScan() {
 // threads simultaneously, and patching LoadLibraryExW while another thread is
 // executing it causes an unhandled hardware fault that kills Explorer.
 static void PollForTaskbarViewDll() {
-    std::thread([]() {
+    g_PollForDllThread = std::thread([]() {
         for (int i = 0; i < 600 && !g_Unloading.load(); ++i) {
             Sleep(100);
             HMODULE m = GetModuleHandleW(L"Taskbar.View.dll");
@@ -2913,7 +2915,7 @@ static void PollForTaskbarViewDll() {
             }
             break;
         }
-    }).detach();
+    });
 }
 
 // ---------- Mod entry points ----------
@@ -2973,6 +2975,8 @@ BOOL Wh_ModInit() {
 
 void Wh_ModUninit() {
     g_Unloading = true;
+    if (g_PollForDllThread.joinable()) g_PollForDllThread.join();
+    if (g_InitialScanThread.joinable()) g_InitialScanThread.join();
 
     if (!g_LibbyIconTempPath.empty()) DeleteFileW(g_LibbyIconTempPath.c_str());
 
