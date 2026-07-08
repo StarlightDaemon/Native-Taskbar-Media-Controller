@@ -1,10 +1,10 @@
 {
-  "installed_edict_version": "1.0.0",
-  "installed_at": "2026-06-13T04:18:34.101503+00:00",
+  "installed_edict_version": "1.0.1",
+  "installed_at": "2026-07-08T17:42:45.258878+00:00",
   "managed_files": [
     {
       "path": "README.md",
-      "hash": "1103963b0973603701de8c196fc5f9afa9f6d869c9cd6a04c12539166bc736bc"
+      "hash": "9465f501f11fce972d3952cc2ba3e9d19917518f5af6fb4347db27ee66155216"
     },
     {
       "path": "OPERATING_RULES.md",
