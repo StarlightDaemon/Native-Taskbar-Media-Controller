@@ -34,3 +34,7 @@ See `CURRENT_STATE.md` for the live ordered candidate list. Full synthesis at `f
 **Remaining from synthesis (not yet implemented):**
 - SC-HT-1: LRC lyrics (HibritTofas)
 - SC-GR-1: FFT audio visualizer (GR0UD) — requires process compatibility audit first
+
+**Deferred / maybe later:**
+- SC-HT-5: Per-app volume control — no implementation plan; deferred
+- SC-HT-3: Shuffle / repeat status — low priority; deferred alongside SC-HT-5

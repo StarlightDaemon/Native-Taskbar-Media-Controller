@@ -17,7 +17,7 @@ Inserts the widget directly into the taskbar's own XAML tree (`Grid#RootGrid` un
 <details>
 <summary>More features</summary>
 
-Also includes: scrolling marquee title, inline album art, track progress bar with position/duration timestamp, smooth progress interpolation between SMTC ticks, text crossfade on track changes, widget fade animations, acrylic frosted-glass background, adaptive text color, fullscreen auto-hide, live repositioning as tray icons change, double-click to focus the source app, and middle-click to stop the session.
+Also includes: scrolling marquee title, inline album art, track progress bar with position/duration timestamp, smooth progress interpolation between SMTC ticks, text crossfade on track changes, widget fade animations, acrylic frosted-glass background, adaptive text color, fullscreen auto-hide, live repositioning as tray icons change (Right mode only), double-click to focus the source app, and middle-click to stop the session.
 
 </details>
 
@@ -69,10 +69,13 @@ Works with any app that registers a Windows GSMTC session. Native apps get full 
 
 - **Synchronized LRC lyrics** — fetch and display time-synced lyrics alongside the now-playing info (SC-HT-1)
 - **FFT audio visualizer** — real-time frequency spectrum rendered inside the panel (SC-GR-1)
-- **Per-app volume control** — adjust the active session's volume directly from the widget (SC-HT-5)
-- **Shuffle / repeat status** — show the current shuffle and repeat mode alongside track info (SC-HT-3)
 
 For the full feature analysis across 11 community forks see the [fork synthesis report](docs/fork-reports/synthesis-2026-05-19.md).
+
+### Maybe later
+
+- **Per-app volume control** (SC-HT-5) — deferred; no implementation plan yet. Revisit if the core feature set stabilises at v1.x.
+- **Shuffle / repeat status** (SC-HT-3) — deferred; low priority relative to current roadmap. Revisit alongside SC-HT-5.
 
 <details>
 <summary>Acknowledgements</summary>

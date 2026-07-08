@@ -18,6 +18,7 @@ ipch/
 *.VC.db
 *.VC.opendb
 .vscode/
+.claude/
 
 # Windows
 Thumbs.db
@@ -37,9 +38,6 @@ ehthumbs.db
 # Runtime diagnostics
 *.evtx
 *.log
-
-# Diagnostic probes
-check_xaml.cpp
 
 # Fork source snapshots (reference material kept locally, not redistributed)
 forks/
