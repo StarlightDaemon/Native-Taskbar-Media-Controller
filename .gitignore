@@ -46,3 +46,5 @@ forks/
 audit-reports/
 .raiden/state/AUDIT_LOG.md
 .raiden/state/last-audit.md
+.raiden/state/FORK_REVIEW_LOG.md
+.raiden/state/last-fork-review.md

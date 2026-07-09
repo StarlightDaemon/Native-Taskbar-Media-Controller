@@ -73,3 +73,20 @@ All XAML operations are marshaled to the UI thread via the dispatcher (`RunAsync
 `TryEnqueueAsync`). This is a hard constraint enforced by the XAML STA threading
 contract, not a stylistic preference — calling XAML APIs off the UI thread produces
 undefined behavior or silent failures.
+
+---
+
+## D-8: Audit-Ledger Untracking (2026-07-09)
+
+The four protocol-owned ledgers — `AUDIT_LOG.md`, `FORK_REVIEW_LOG.md`,
+`last-audit.md`, `last-fork-review.md` under `.raiden/state/` — were git-tracked on
+this public repo, against the intent of Raiden-ops D-0038 (protocol state/audit
+output should not be published on public instances). Untracked per D-0038 and
+operator decision (2026-07-09).
+
+**Disposition:** `git rm --cached` on all four; files remain on disk and all four
+paths were added to `.gitignore` under the existing D-0038 exclusion block.
+
+**Consequence:** git history retains previously published copies of these files —
+untracking stops future publication, it does not unpublish already-committed
+history.
