@@ -1,5 +1,52 @@
 # Work Log
 
+## [2026-07-09] Edict v2.0.0 + state normalization
+
+**Objective:** Apply Edict v2.0.0 to the managed core and normalize `.raiden/state`
+prose against the new `OPERATING_RULES.md` Fact-Home Rule.
+
+**Edict update:** `plan`/`apply` via `raiden_updater.cli` — 1.0.1 → 2.0.0.
+`ROUTING_POLICY.md` added; `MODEL_TIERS.md` removed (`managed_file_removal`
+warning, expected — file dropped from the v2.0.0 package). `hooks/commit-msg`
+unchanged (adopted 2026-07-08, already carries the current marker). Re-plan
+confirmed "Already up to date". `.raiden/instance/metadata.json` stamped with
+`"state_schema_version": 2`.
+
+**Routing overlay:** `.raiden/local/MODEL_MAP.md` (untracked, gitignored)
+removed; replaced with `.raiden/local/ROUTING.md` (ladder-form routing
+overlay — R1–R4 rungs plus an offload pool, per operator decision).
+
+**Audit-ledger untracking (D-8):** `.raiden/state/AUDIT_LOG.md`,
+`FORK_REVIEW_LOG.md`, `last-audit.md`, `last-fork-review.md` untracked via
+`git rm --cached` — files remain on disk, only git tracking stops. All four
+paths added to `.gitignore` under the existing D-0038 exclusion block. Ledgers
+were tracked on this public repo against the intent of Raiden-ops D-0038;
+untracked per D-0038 and operator decision (2026-07-09). Git history retains
+previously published copies — this stops future publication, it does not
+unpublish already-committed history.
+
+**State normalization (Fact-Home Rule):**
+- Relocated the historical Edict-version fact from the 2026-06-07 migration
+  remediation record — "Edict v0.6.1 confirmed clean" — out of `CURRENT_STATE.md`
+  and `OPEN_LOOPS.md` prose and into the dated `[2026-06-07]` entry below (its
+  proper historical home; no current-version claims were found in state prose).
+- Collapsed `CURRENT_STATE.md`'s migration-remediation section to a bare `OL-11`
+  citation — the loop's open/closed status and detail already live in
+  `OPEN_LOOPS.md`, so `CURRENT_STATE.md` no longer restates them.
+- No hand-written "Last Updated" / "Last Verified" footers were found in any
+  `.raiden/state/*.md` file (including `GOALS.md`) — none to remove.
+
+---
+
+## [2026-06-07] Migration Remediation Closed (OL-11)
+
+WSL→macOS path migration audit completed under **Edict v0.6.1**, confirmed
+clean. All four findings (P1–P4) fixed and pushed in commit `7a91ec3` on
+`main`; global `/mnt/e/` scan clean post-remediation. Closed as OL-11 in
+`OPEN_LOOPS.md`.
+
+---
+
 ## [2026-05-24] v1.0.0 Release — Log Cleanup + Ship
 
 **Objective:** Occam's razor release gate. Strip all remaining verbose trace logs; leave only error and warning paths. Tag and ship v1.0.0.
