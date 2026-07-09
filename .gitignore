@@ -48,3 +48,6 @@ audit-reports/
 .raiden/state/last-audit.md
 .raiden/state/FORK_REVIEW_LOG.md
 .raiden/state/last-fork-review.md
+
+# Local tooling directories
+.serena/
