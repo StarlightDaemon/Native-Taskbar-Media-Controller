@@ -5,7 +5,7 @@
 Migration audit completed 2026-06-07 (see `WORK_LOG.md`). All four
 findings resolved in commit `7a91ec3`:
 - **P1** — `.git/hooks/commit-msg` chmod +x (was 666, execute bit missing)
-- **P2** — `AGENTS.md` L26: `/mnt/e/Raiden/` → `/Users/dante/Citadel/Raiden/`
+- **P2** — `AGENTS.md` L26: `/mnt/e/Raiden/` → `E:\Citadel/Raiden/`
 - **P3** — `docs/audit-reports/` (2 files): repo path WSL→macOS
 - **P4** — `docs/prompts/` (2 files): all `/mnt/e/` paths WSL→macOS
 Global `/mnt/e/` scan clean post-remediation.
