@@ -51,3 +51,6 @@ audit-reports/
 
 # Local tooling directories
 .serena/
+
+# macOS
+._*
