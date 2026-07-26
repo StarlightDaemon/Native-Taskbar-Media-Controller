@@ -41,7 +41,7 @@ unpublish already-committed history.
 ## [2026-06-07] Migration Remediation Closed (OL-11)
 
 WSL→macOS path migration audit completed under **Edict v0.6.1**, confirmed
-clean. All four findings (P1–P4) fixed and pushed in commit `7a91ec3` on
+clean. All four findings (P1–P4) fixed and pushed in commit `b09a4a4` on
 `main`; global `/mnt/e/` scan clean post-remediation. Closed as OL-11 in
 `OPEN_LOOPS.md`.
 
@@ -157,7 +157,7 @@ Matches Windows taskbar button toggle behavior. Sidesteps focus-detection proble
 ## [2026-05-22] Session Close — v0.1.0-beta.2 Tagged and Pushed
 - **Objective:** Review repo state, commit pending handoffs, bump version, push.
 - **Version bumped:** `0.1.0-beta.1` → `0.1.0-beta.2` in mod header and README.
-- **Committed:** Three session handoff files (HANDOFF-COVERART, HANDOFF-HARDENING, HANDOFF-LIBBY) staged and committed alongside version bump (commit `41884f3`).
+- **Committed:** Three session handoff files (HANDOFF-COVERART, HANDOFF-HARDENING, HANDOFF-LIBBY) staged and committed alongside version bump (commit `9e49df9`).
 - **Tagged:** `v0.1.0-beta.2` annotated tag created and pushed to remote.
 - **Branch:** `main` up to date on remote.
 - **PAT policy:** PAT used transiently for push; not stored or committed.
@@ -176,7 +176,7 @@ Matches Windows taskbar button toggle behavior. Sidesteps focus-detection proble
 - **Mod header updated:** `@author` → StarlightDaemon, `@version` → `0.1.0-beta.1`, description and `WindhawkModReadme` block rewritten for public release.
 - **Release cut:** `v0.1.0-beta.1` tagged on `main`, GitHub pre-release published.
 - **Raiden state updated:** CURRENT_STATE, GOALS, OPEN_LOOPS all populated.
-- **Branch status:** `feature/rename-to-native-controller` is unmerged into `main` locally — wait, actually it WAS merged into main via `--no-ff` merge commit `dc4c0d2`. Both branches are up to date on remote.
+- **Branch status:** `feature/rename-to-native-controller` is unmerged into `main` locally — wait, actually it WAS merged into main via `--no-ff` merge commit `1d0bc57`. Both branches are up to date on remote.
 - **PAT policy:** Two PATs were used and revoked by operator within the same session. Token is never committed or stored; remote URL is sanitized after each use.
 
 ## [2026-05-23] Session Close — OL-9 Phase 3 Shipped (v0.2.0-beta.6)
@@ -184,6 +184,6 @@ Matches Windows taskbar button toggle behavior. Sidesteps focus-detection proble
 - **Objective:** Review open tasks/loops, plan Phase 3 (OL-9), delegate implementation, push release.
 - **Open loop review:** Confirmed OL-9 (Phase 3 — BackgroundStyle setting) as the only active loop. All others closed. Libby verification items deferred to post-v1.0.0.
 - **Handoff authored:** `.raiden/state/HANDOFF-OL9-BACKGROUND-THEMING.md` — self-contained brief for second agent covering Acrylic gate status, BackgroundStyle enum design, Chameleon 64-bucket quantization via `BitmapDecoder`+`SoftwareBitmap`+`IMemoryBufferByteAccess`, `LinearGradientBrush` application, BT.601 luma → `g_ChameleonLightBg` adaptive text, settings-change Option A (live apply in `ApplyStateToWidget`).
-- **Implementation (second agent):** All changes landed in single commit `c8e9353` — BackgroundStyle YAML setting + `ModSettings` field, `ComputeDominantColors()` helper, Chameleon fire_and_forget path, gated Acrylic, no-art transparent fallback, `g_ChameleonLightBg` atomic for text color, `winrt/Windows.Graphics.Imaging.h` + interop header.
+- **Implementation (second agent):** All changes landed in single commit `e2cc059` — BackgroundStyle YAML setting + `ModSettings` field, `ComputeDominantColors()` helper, Chameleon fire_and_forget path, gated Acrylic, no-art transparent fallback, `g_ChameleonLightBg` atomic for text color, `winrt/Windows.Graphics.Imaging.h` + interop header.
 - **Tagged and pushed:** `v0.2.0-beta.6` on `main` — both pushed to remote. PAT used transiently, not stored.
 - **State:** No open loops. Post-v1.0.0 deferred items: Libby AUMID verification, BootLog + verbose log strip.

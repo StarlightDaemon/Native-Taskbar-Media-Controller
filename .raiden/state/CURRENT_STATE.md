@@ -9,10 +9,10 @@ Migration remediation: see OL-11.
 File: `native-taskbar-media-controller.wh.cpp`
 Version: `1.5.0`
 GitHub: https://github.com/StarlightDaemon/Native-Taskbar-Media-Controller
-Release tag: `v1.5.0` (2026-06-24, commit `59e2a37`)
+Release tag: `v1.5.0` (2026-06-24, commit `c07fbf3`)
 
 **Branch state:**
-- `main` — v1.5.0 tagged and pushed at `59e2a37`
+- `main` — v1.5.0 tagged and pushed at `c07fbf3`
 
 **New features (97096a7 + ffd5ba7):**
 
@@ -21,8 +21,8 @@ Release tag: `v1.5.0` (2026-06-24, commit `59e2a37`)
 
 **Audit-cycle remediation (2026-06-24):**
 
-- **F2a — `g_TrayResizeToken` not revoked on uninit** (`aaf3e4a`): `RemoveWidget` now revokes `g_TrayResizeToken` before the widget is detached, closing the unrevoked-subscription teardown gap flagged in the 2026-06-24 audit.
-- **F2b — Detached `InitialScan` and `PollForDll` threads never joined in `Wh_ModUninit`** (`59e2a37`): both threads are now joined in `Wh_ModUninit`, preventing use-after-free on hot unload.
+- **F2a — `g_TrayResizeToken` not revoked on uninit** (`aa2cde1`): `RemoveWidget` now revokes `g_TrayResizeToken` before the widget is detached, closing the unrevoked-subscription teardown gap flagged in the 2026-06-24 audit.
+- **F2b — Detached `InitialScan` and `PollForDll` threads never joined in `Wh_ModUninit`** (`c07fbf3`): both threads are now joined in `Wh_ModUninit`, preventing use-after-free on hot unload.
 
 ---
 

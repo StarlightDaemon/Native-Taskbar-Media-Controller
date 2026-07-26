@@ -3,7 +3,7 @@
 ## ~~OL-11: WSL→macOS migration remediation~~ CLOSED (2026-06-07)
 
 Migration audit completed 2026-06-07 (see `WORK_LOG.md`). All four
-findings resolved in commit `7a91ec3`:
+findings resolved in commit `b09a4a4`:
 - **P1** — `.git/hooks/commit-msg` chmod +x (was 666, execute bit missing)
 - **P2** — `AGENTS.md` L26: `/mnt/e/Raiden/` → `E:\Citadel/Raiden/`
 - **P3** — `docs/audit-reports/` (2 files): repo path WSL→macOS
@@ -19,18 +19,18 @@ construction. First post-v1.0.0 bug report or session can confirm.
 
 ## ~~OL-7: General cover art (XAML BitmapImage)~~ CLOSED
 
-Shipped in `bf5b4c9` (2026-05-22): square `Image` element, `BitmapImage` loaded
+Shipped in `29bc1e5` (2026-05-22): square `Image` element, `BitmapImage` loaded
 via `co_await OpenReadAsync` + `SetSourceAsync`, marshalled back to UI dispatcher
 before `Source` is set. Libby null-thumbnail collapses element gracefully.
 
 ## ~~OL-8: Commit and tag beta.2.8 cold-boot fix~~ CLOSED
 
-Shipped in `979e033` (2026-05-22): cold-boot LoadLibraryExW hook replaced with
+Shipped in `e6bdae7` (2026-05-22): cold-boot LoadLibraryExW hook replaced with
 `PollForTaskbarViewDll` poll thread. Tagged `v0.1.0-beta.2.8` and pushed to remote.
 
 ## ~~OL-2: Phase 2 feature selection~~ CLOSED
 
-Implemented in `b58aecb` (2026-05-23) as `v0.2.0-beta.1`. All four candidates shipped:
+Implemented in `a502184` (2026-05-23) as `v0.2.0-beta.1`. All four candidates shipped:
 - **SC-CH-1** — `IsTaskbarEffectivelyVisible` auto-hide detection
 - **SC-UI-2** — Adaptive text color from album art luminance (BT.601, gated by `AdaptiveTextColor` setting)
 - **SC-M-2** — `BringSourceAppToFront` on double-tap via `PKEY_AppUserModel_ID` + exe fallback
@@ -66,7 +66,7 @@ All three modes are applied live in `ApplyStateToWidget()` — no widget rebuild
 
 ## ~~OL-6: Libby audiobook support review & refinement~~ CLOSED
 
-Shipped in `3f2f5a5` (2026-05-22):
+Shipped in `fb42605` (2026-05-22):
 - **2a** AlbumTitle/AlbumArtist fallback (fixes flash-of-nothing; no AUMID gating)
 - **2b** Playback rate suffix on artist row (` · 1.5×`) when speed ≠ 1.0
 - **2c** `«` SkipBack / `»` SkipFwd buttons gated on `IsSkipForward/BackwardEnabled`
@@ -89,4 +89,4 @@ warning log added when drain times out before `g_MediaStates` cleanup.
 
 ## ~~OL-3: `feature/rename-to-native-controller` branch not merged~~ CLOSED
 
-Merged to `main` via `dc4c0d2`. Closed 2026-05-21.
+Merged to `main` via `1d0bc57`. Closed 2026-05-21.
