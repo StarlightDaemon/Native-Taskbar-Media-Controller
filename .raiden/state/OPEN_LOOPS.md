@@ -1,5 +1,56 @@
 # Open Loops
 
+## OL-12: CURRENT_STATE.md release-note accretion (audit P3 residue)
+
+Filed 2026-07-26 per framework decision `Raiden:D-0058` — audit findings rated
+Medium or higher must become loops or be explicitly dispositioned. This is the
+**unresolved remainder** of P3 ("state and doc sync", F1a/F1c/F1d/F1e/F3a/F1f)
+from the 2026-06-24 audit, which `last-audit.md` recorded as "in progress this
+session" and which was then tracked nowhere for a month.
+
+- **Status:** Open
+- **Gate:** none — ordinary work
+- Verified 2026-07-26, the version-sync half of P3 **is** done: `README.md:5`,
+  `CURRENT_STATE.md:7`, and `GOALS.md:15` all state v1.5.0, and the repo's
+  latest tag is in fact `v1.5.0`.
+- What remains is the drift the 2026-06-24 audit named in its own dominant
+  theme: `CURRENT_STATE.md` has accreted into a changelog. It is ~10 KB of
+  stacked per-release sections, and the historical ones carry claims that read
+  as current — most clearly line 34, "Latest release tag: `v1.4.8` (2026-05-25)
+  — superseded by v1.4.9", sitting two releases behind the same file's own
+  header, and referencing a v1.4.9 that no other surface mentions.
+- **Why it matters:** `CURRENT_STATE.md` is defined as current-facts-only and
+  overwritten, not appended (state schema v2 / D-0051). A file that stacks
+  superseded release sections has a second, contradictory copy of a fact whose
+  home is elsewhere — `WORK_LOG.md` for dated history, git tags for releases.
+- **Success condition:** `CURRENT_STATE.md` describes only the current release;
+  per-release history moves to `WORK_LOG.md` or is dropped where git tags
+  already carry it; no superseded "Latest release tag" line survives.
+
+## ~~OL-13: Scope ledger — register or retire SC-HT-5 / SC-HT-3 (audit P4)~~ CLOSED (2026-07-26)
+
+Filed and closed 2026-07-26 per `Raiden:D-0058`. P4 from the 2026-06-24 audit
+(F3b/F3c) was outstanding outside the loop system.
+
+**Disposition: resolved — verified, not assumed.** Both scope items are now
+registered as explicitly deferred, in two places: `README.md:77-78` ("deferred;
+no implementation plan yet" / "deferred; low priority") and `GOALS.md:39-40`.
+The second half of P4, "populate DECISIONS.md", is likewise done —
+`.raiden/state/DECISIONS.md` carries eight entries (D-1 through D-8), including
+the two permanent refusals D-4 and D-5. The work had been completed; only the
+tracking was missing.
+
+## ~~OL-14: Git and ignore hygiene (audit P5)~~ CLOSED (2026-07-26)
+
+Filed and closed 2026-07-26 per `Raiden:D-0058`. P5 from the 2026-06-24 audit
+(F4/F5) was outstanding outside the loop system.
+
+**Disposition: resolved — verified, not assumed.** Both legs check out on disk:
+`.claude/` is present in the repo `.gitignore` (line 21), and the stale
+`feature/rename-to-native-controller` branch is gone — `git branch -a` shows
+only `main` and its remote tracking refs. (That branch also has its own closed
+entry, OL-3, below.) Again the work was done and only the tracking was missing.
+
 ## ~~OL-11: WSL→macOS migration remediation~~ CLOSED (2026-06-07)
 
 Migration audit completed 2026-06-07 (see `WORK_LOG.md`). All four
