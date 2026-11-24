@@ -27,12 +27,12 @@ There's no build script or test suite. The mod is compiled by Windhawk when it's
 
 This file and `.raiden/state/` are authoritative for this repo. Read in this order and stop when you have what you need:
 1. `.raiden/state/CURRENT_STATE.md`: the current release at the top. It's about 10 KB of stacked release notes; only the first section is current (OL-12).
-2. The top of `.raiden/state/OPEN_LOOPS.md`: open, deferred and held items. Entries struck through and marked CLOSED are done.
+2. The `## Active` section at the top of `.raiden/state/OPEN_LOOPS.md`: open, deferred and held items (statuses: `open`, `deferred`, `held: <who>`, `no-action`, `accepted`, `closed`).
 3. Only when needed: `DECISIONS.md`, `WORK_LOG.md` and `docs/audit-reports/` (history and evidence). `AUDIT_LOG.md`, `FORK_REVIEW_LOG.md` and the `last-*.md` files in `.raiden/state/` are gitignored, so they exist only in the main checkout.
 
 Current picture: one open item, OL-12. It is ordinary work: trim `CURRENT_STATE.md` to the current release and move per-release history to `WORK_LOG.md`. Everything else is closed.
 
-The fixed status set (`open`, `deferred`, `held: <who>`, `no-action`, `accepted`, `closed`) hasn't been applied to `OPEN_LOOPS.md` yet, because the main checkout has an uncommitted change to that file (a closed sweep loop). Apply it when that change is committed. Update `CURRENT_STATE.md` and `OPEN_LOOPS.md` when you finish or pause work. Keep one home per fact and link evidence; don't paste it in. Never renumber or reuse a loop or decision ID. Medium+ audit findings become loops.
+Update `CURRENT_STATE.md` and `OPEN_LOOPS.md` when you finish or pause work. Keep one home per fact and link evidence; don't paste it in. Never renumber or reuse a loop or decision ID. Medium+ audit findings become loops.
 
 ## Working in parallel
 

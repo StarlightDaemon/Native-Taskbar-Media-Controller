@@ -1,5 +1,12 @@
 # Open Loops
 
+<!-- Statuses: open · deferred · held: <who> · no-action · accepted · closed. Each active item: ID, status, gate owner, next step or restart condition, evidence. IDs never change or get reused. Entries below stay in their original order. -->
+
+## Active
+
+- **OL-12 · open · gate: none (ordinary work)** · Trim `CURRENT_STATE.md` to the current release (v1.5.0); move per-release history to `WORK_LOG.md` or drop it where git tags carry it; no superseded "Latest release tag" line may survive. Details in the OL-12 entry below.
+- All other entries are closed.
+
 ## OL-12: CURRENT_STATE.md release-note accretion (audit P3 residue)
 
 Filed 2026-07-26 per framework decision `Raiden:D-0058` — audit findings rated
@@ -8,7 +15,7 @@ Medium or higher must become loops or be explicitly dispositioned. This is the
 from the 2026-06-24 audit, which `last-audit.md` recorded as "in progress this
 session" and which was then tracked nowhere for a month.
 
-- **Status:** Open
+- **Status:** open
 - **Gate:** none — ordinary work
 - Verified 2026-07-26, the version-sync half of P3 **is** done: `README.md:5`,
   `CURRENT_STATE.md:7`, and `GOALS.md:15` all state v1.5.0, and the repo's
@@ -27,7 +34,7 @@ session" and which was then tracked nowhere for a month.
   per-release history moves to `WORK_LOG.md` or is dropped where git tags
   already carry it; no superseded "Latest release tag" line survives.
 
-## ~~OL-13: Scope ledger — register or retire SC-HT-5 / SC-HT-3 (audit P4)~~ CLOSED (2026-07-26)
+## ~~OL-13: Scope ledger — register or retire SC-HT-5 / SC-HT-3 (audit P4)~~ closed (2026-07-26)
 
 Filed and closed 2026-07-26 per `Raiden:D-0058`. P4 from the 2026-06-24 audit
 (F3b/F3c) was outstanding outside the loop system.
@@ -40,7 +47,7 @@ The second half of P4, "populate DECISIONS.md", is likewise done —
 the two permanent refusals D-4 and D-5. The work had been completed; only the
 tracking was missing.
 
-## ~~OL-14: Git and ignore hygiene (audit P5)~~ CLOSED (2026-07-26)
+## ~~OL-14: Git and ignore hygiene (audit P5)~~ closed (2026-07-26)
 
 Filed and closed 2026-07-26 per `Raiden:D-0058`. P5 from the 2026-06-24 audit
 (F4/F5) was outstanding outside the loop system.
@@ -51,7 +58,7 @@ Filed and closed 2026-07-26 per `Raiden:D-0058`. P5 from the 2026-06-24 audit
 only `main` and its remote tracking refs. (That branch also has its own closed
 entry, OL-3, below.) Again the work was done and only the tracking was missing.
 
-## ~~OL-11: WSL→macOS migration remediation~~ CLOSED (2026-06-07)
+## ~~OL-11: WSL→macOS migration remediation~~ closed (2026-06-07)
 
 Migration audit completed 2026-06-07 (see `WORK_LOG.md`). All four
 findings resolved in commit `b09a4a4`:
@@ -61,25 +68,25 @@ findings resolved in commit `b09a4a4`:
 - **P4** — `docs/prompts/` (2 files): all `/mnt/e/` paths WSL→macOS
 Global `/mnt/e/` scan clean post-remediation.
 
-## ~~OL-10: Marquee scroll live test~~ CLOSED (deferred to post-v1.0.0)
+## ~~OL-10: Marquee scroll live test~~ closed (deferred to post-v1.0.0)
 
 Implementation shipped in beta.5. Live test deferred — v1.0.0 shipped without
 on-device confirmation per Occam's razor release decision (2026-05-24). The
 `LayoutUpdated` + `Storyboard/DoubleAnimation` implementation is correct by
 construction. First post-v1.0.0 bug report or session can confirm.
 
-## ~~OL-7: General cover art (XAML BitmapImage)~~ CLOSED
+## ~~OL-7: General cover art (XAML BitmapImage)~~ closed
 
 Shipped in `29bc1e5` (2026-05-22): square `Image` element, `BitmapImage` loaded
 via `co_await OpenReadAsync` + `SetSourceAsync`, marshalled back to UI dispatcher
 before `Source` is set. Libby null-thumbnail collapses element gracefully.
 
-## ~~OL-8: Commit and tag beta.2.8 cold-boot fix~~ CLOSED
+## ~~OL-8: Commit and tag beta.2.8 cold-boot fix~~ closed
 
 Shipped in `e6bdae7` (2026-05-22): cold-boot LoadLibraryExW hook replaced with
 `PollForTaskbarViewDll` poll thread. Tagged `v0.1.0-beta.2.8` and pushed to remote.
 
-## ~~OL-2: Phase 2 feature selection~~ CLOSED
+## ~~OL-2: Phase 2 feature selection~~ closed
 
 Implemented in `a502184` (2026-05-23) as `v0.2.0-beta.1`. All four candidates shipped:
 - **SC-CH-1** — `IsTaskbarEffectivelyVisible` auto-hide detection
@@ -89,7 +96,7 @@ Implemented in `a502184` (2026-05-23) as `v0.2.0-beta.1`. All four candidates sh
 
 Pending operator live test + tag + push of `v0.2.0-beta.1`. Phase 3 scope in OL-9.
 
-## ~~SC-UI-3: Title truncation — Grid layout + marquee scroll~~ CLOSED
+## ~~SC-UI-3: Title truncation — Grid layout + marquee scroll~~ closed
 
 Shipped 2026-05-23 as `v0.2.0-beta.5`:
 
@@ -101,7 +108,7 @@ Shipped 2026-05-23 as `v0.2.0-beta.5`:
   1 s end-pause → instant reset; fires only when text overflows the clip container.
   Gated by `MarqueeTitle` setting (default true). Artist row unchanged (CharacterEllipsis).
 
-## ~~OL-9: Phase 3 — Background theming~~ CLOSED
+## ~~OL-9: Phase 3 — Background theming~~ closed
 
 Shipped 2026-05-23 as `v0.2.0-beta.6`:
 
@@ -115,7 +122,7 @@ Shipped 2026-05-23 as `v0.2.0-beta.6`:
 
 All three modes are applied live in `ApplyStateToWidget()` — no widget rebuild on setting change.
 
-## ~~OL-6: Libby audiobook support review & refinement~~ CLOSED
+## ~~OL-6: Libby audiobook support review & refinement~~ closed
 
 Shipped in `fb42605` (2026-05-22):
 - **2a** AlbumTitle/AlbumArtist fallback (fixes flash-of-nothing; no AUMID gating)
@@ -127,24 +134,24 @@ Shipped in `fb42605` (2026-05-22):
 - Confirm whether title/artist swap (AlbumTitle as headline) is correct for Libby
 - Confirm Libby's `TimelineProperties` are populated → feeds SC-SP-1 priority
 
-## ~~OL-4: `g_GsmtcStartEvent` handle TOCTOU fix~~ CLOSED
+## ~~OL-4: `g_GsmtcStartEvent` handle TOCTOU fix~~ closed
 
 Shipped 2026-05-22: `g_GsmtcStartEvent` converted to `std::atomic<HANDLE>`;
 all call sites use `.load()`/`.exchange()`; uninit snaps with `.exchange(nullptr)`
 before `CloseHandle`. No plain reads remain.
 
-## ~~OL-5: Uninit async-task drain timeout too short~~ CLOSED
+## ~~OL-5: Uninit async-task drain timeout too short~~ closed
 
 Shipped 2026-05-22: drain raised to 50 × 100 ms (5 s), matching hook drain;
 warning log added when drain times out before `g_MediaStates` cleanup.
 
-## ~~OL-3: `feature/rename-to-native-controller` branch not merged~~ CLOSED
+## ~~OL-3: `feature/rename-to-native-controller` branch not merged~~ closed
 
 Merged to `main` via `1d0bc57`. Closed 2026-05-21.
 
 ### LOOP-SWEEP-20260831-001 — native-taskbar-media-controller registry/journal Edict Version mismatch
 
-- Status: Closed — resolved 2026-10-17; verified journal attribution repair
+- Status: closed — resolved 2026-10-17; verified journal attribution repair
 - Gate: operator
 - Success Condition: registry/instances.md Edict Version and the distribution log's latest journalled version agree for native-taskbar-media-controller (next fleet sweep no longer flags registry_journal_mismatch).
 - Check: registry_journal_mismatch:native-taskbar-media-controller
