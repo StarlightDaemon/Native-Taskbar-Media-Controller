@@ -4,10 +4,9 @@
 
 ## Active
 
-- **OL-12 · open · gate: none (ordinary work)** · Trim `CURRENT_STATE.md` to the current release (v1.5.0); move per-release history to `WORK_LOG.md` or drop it where git tags carry it; no superseded "Latest release tag" line may survive. Details in the OL-12 entry below.
-- All other entries are closed.
+Nothing is open, deferred or held. All entries below are closed (OL-12 closed 2026-11-23).
 
-## OL-12: CURRENT_STATE.md release-note accretion (audit P3 residue)
+## ~~OL-12: CURRENT_STATE.md release-note accretion (audit P3 residue)~~ closed (2026-11-23)
 
 Filed 2026-07-26 per framework decision `Raiden:D-0058` — audit findings rated
 Medium or higher must become loops or be explicitly dispositioned. This is the
@@ -15,7 +14,8 @@ Medium or higher must become loops or be explicitly dispositioned. This is the
 from the 2026-06-24 audit, which `last-audit.md` recorded as "in progress this
 session" and which was then tracked nowhere for a month.
 
-- **Status:** open
+- **Status:** closed 2026-11-23
+- **Resolution (2026-11-23):** `CURRENT_STATE.md` rewritten to current facts only (v1.5.0, capabilities, known limits, scope, open items; about 2.4 KB). The per-release sections moved verbatim into the 2026-11-23 entry of `WORK_LOG.md`. No superseded "Latest release tag" line survives in `CURRENT_STATE.md`.
 - **Gate:** none — ordinary work
 - Verified 2026-07-26, the version-sync half of P3 **is** done: `README.md:5`,
   `CURRENT_STATE.md:7`, and `GOALS.md:15` all state v1.5.0, and the repo's
