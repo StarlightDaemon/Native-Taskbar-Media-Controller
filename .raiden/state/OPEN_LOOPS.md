@@ -141,3 +141,16 @@ warning log added when drain times out before `g_MediaStates` cleanup.
 ## ~~OL-3: `feature/rename-to-native-controller` branch not merged~~ CLOSED
 
 Merged to `main` via `1d0bc57`. Closed 2026-05-21.
+
+### LOOP-SWEEP-20260831-001 — native-taskbar-media-controller registry/journal Edict Version mismatch
+
+- Status: Closed — resolved 2026-10-17; verified journal attribution repair
+- Gate: operator
+- Success Condition: registry/instances.md Edict Version and the distribution log's latest journalled version agree for native-taskbar-media-controller (next fleet sweep no longer flags registry_journal_mismatch).
+- Check: registry_journal_mismatch:native-taskbar-media-controller
+- Resolution: the central attribution review verified installed metadata and
+  baseline consistency and repaired narrative journal matching. The current
+  registry and journal agree; no Edict was distributed and no installed version
+  was changed. This closes the reporting finding, not product acceptance.
+- Evidence: Raiden-ops:LOOP-0030 and the 2026-10-17 generated fleet check.
+
